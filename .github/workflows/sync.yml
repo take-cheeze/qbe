@@ -1,0 +1,34 @@
+name: Sync upstream QBE
+
+# Mirrors https://c9x.me/git/qbe.git into this repo:
+#   upstream master -> master, upstream tags -> tags.
+# `main` (the default branch) holds only this workflow and the README, so the
+# mirror push can never overwrite it. GitHub-hosted runners can reach c9x.me.
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Fetch upstream
+        run: git clone --bare https://c9x.me/git/qbe.git upstream.git
+
+      - name: Push master and tags
+        working-directory: upstream.git
+        env:
+          TOKEN: ${{ github.token }}
+        run: |
+          git remote add mirror "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          # Fast-forward only: a rewritten upstream history needs a human look.
+          git push mirror refs/heads/master:refs/heads/master
+          git push mirror 'refs/tags/*:refs/tags/*'
