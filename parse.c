@@ -970,7 +970,8 @@ parsefields(Field *fld, Typ *ty, int t)
 
 	n = 0;
 	sz = 0;
-	al = ty->align;
+	/* an empty struct has no alignment yet (-1): 1 << -1 below is undefined */
+	al = ty->align < 0 ? 0 : ty->align;
 	while (t != Trbrace) {
 		ty1 = 0;
 		switch (t) {
