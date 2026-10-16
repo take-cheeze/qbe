@@ -235,6 +235,13 @@ coalesce(Fn *fn)
 			s->t = n;
 			s->sz = t->alias.u.loc.sz;
 			s->m = t->alias.u.loc.m;
+			/* nfcxx: a slot that is never stored to must still be
+			 * readable. C allows passing an uninitialized struct by
+			 * value; with an empty mask the slot is killed and the
+			 * argument becomes a null address (see "crash" below).
+			 * Keep the slot; the callee sees garbage, as with gcc. */
+			if (!s->m)
+				s->m = s->sz >= NBit ? (bits)-1 : BIT(s->sz) - 1;
 			s->s = 0;
 			s->st = vnew(0, sizeof s->st[0], PHeap);
 			s->nst = 0;
