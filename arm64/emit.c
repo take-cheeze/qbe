@@ -272,8 +272,10 @@ loadaddr(Con *c, char *rn, E *e)
 		die("unreachable");
 	case SGlo:
 		if (T.apple)
-			s = "\tadrp\tR, S@pageO\n"
-			    "\tadd\tR, R, S@pageoffO\n";
+			/* no addend on the page relocations: the assembler encodes sym+off@page as a relocation ld64 does not
+			 * support, so the offset is added after the address (a 12-bit immediate, as the addresses of literals are) */
+			s = "\tadrp\tR, S@page\n"
+			    "\tadd\tR, R, S@pageoff\n";
 		else
 			s = "\tadrp\tR, SO\n"
 			    "\tadd\tR, R, #:lo12:SO\n";
@@ -322,6 +324,15 @@ loadaddr(Con *c, char *rn, E *e)
 				fprintf(e->f, "+%"PRIi64, c->bits.i);
 			break;
 		}
+	if (T.apple && c->sym.type == SGlo && c->bits.i) {
+		int64_t o = c->bits.i;
+		if (o > 4095 || o < -4095)
+			die("large address offset on Apple arm64");
+		if (o > 0)
+			fprintf(e->f, "\tadd\t%s, %s, #%"PRIi64"\n", rn, rn, o);
+		else
+			fprintf(e->f, "\tsub\t%s, %s, #%"PRIi64"\n", rn, rn, -o);
+	}
 }
 
 static void
