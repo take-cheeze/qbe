@@ -100,8 +100,8 @@ typclass(Class *c, Typ *t, int *gp, int *fp)
 	c->nfp = 0;
 	c->align = 8;
 
-	if (t->align > 3)
-		err("alignments larger than 8 are not supported");
+	if (t->align > 4)
+		err("alignments larger than 16 are not supported");
 
 	c->size = sz;
 	c->hfa.base = Kx;
@@ -266,6 +266,11 @@ argsclass(Ins *i0, Ins *i1, Class *carg)
 			break;
 		case Oparc:
 		case Oargc:
+			/* AAPCS64: an aggregate with 16-byte alignment starts at an even general register */
+			if (typ[i->arg[0].val].align > 3 && (gp-gpreg) & 1 && ngp > 0) {
+				gp++;
+				ngp--;
+			}
 			typclass(c, &typ[i->arg[0].val], gp, fp);
 			if (c->ngp <= ngp) {
 				if (c->nfp <= nfp) {
@@ -484,6 +489,22 @@ selpar(Fn *fn, Ins *i0, Ins *i1)
 
 	cty = argsclass(i0, i1, ca);
 	fn->reg = arm64_argregs(CALL(cty), 0);
+	/* a general register skipped for a 16-byte aggregate (argsclass) is no argument: it is not live at entry */
+	{
+		bits used = 0, gpall = 0;
+		for (i=i0, c=ca; i<i1; i++, c++) {
+			if (c->class & Cstk)
+				continue;
+			if (i->op == Oparc && !(c->class & Cptr))
+				for (n=0; n<c->nreg; n++)
+					used |= BIT(c->reg[n]);
+			else
+				used |= BIT(c->reg[0]);
+		}
+		for (n=R0; n<=R7; n++)
+			gpall |= BIT(n);
+		fn->reg &= ~(gpall & ~used);
+	}
 
 	il = 0;
 	t = tmp;
