@@ -45,6 +45,11 @@ promote(Fn *fn)
 			}
 			goto Skip;
 		}
+		/* nfcxx: loads and no store (C copies a never-initialized struct, e.g. an empty
+		 * lambda's 1-byte storage): there is no value to promote to. Keep the slot;
+		 * the loads read garbage, as with gcc (scripts/qbe-uninit-load.patch). */
+		if (k == -1)
+			goto Skip;
 		/* get rid of the alloc and replace uses */
 		*i = (Ins){.op = Onop};
 		t->ndef--;
