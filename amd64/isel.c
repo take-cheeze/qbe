@@ -510,6 +510,22 @@ flagi(Ins *i0, Ins *i)
 	return 0;
 }
 
+/* nfcxx: the flags of a 64-bit arithmetic or logic instruction
+ * describe all 64 bits of its result, but jnz and select test a
+ * word.  The optimizer (load elimination followed by copy
+ * elimination) can make a word-class use refer to the long
+ * temporary directly, so "and" and friends of class l must not be
+ * used as the source of the flags; plain compare/test is used. */
+static int
+wflagi(Ins *fi, Ref r, int *k, int *c)
+{
+	if (!fi || !req(fi->to, r))
+		return 0;
+	if (iscmp(fi->op, k, c))
+		return 1;
+	return !KWIDE(fi->cls);
+}
+
 static Ins*
 selsel(Fn *fn, Blk *b, Ins *i, Num *tn)
 {
@@ -533,7 +549,7 @@ selsel(Fn *fn, Blk *b, Ins *i, Num *tn)
 	gencmp = gencpy = swap = 0;
 	k = Kw;
 	c = Cine;
-	if (!fi || !req(fi->to, r)) {
+	if (!wflagi(fi, r, &k, &c)) {
 		gencmp = 1;
 		cr[0] = r;
 		cr[1] = CON_Z;
@@ -616,7 +632,7 @@ seljmp(Blk *b, Fn *fn)
 		return;
 	}
 	fi = flagi(b->ins, &b->ins[b->nins]);
-	if (!fi || !req(fi->to, r)) {
+	if (!wflagi(fi, r, &k, &c)) {
 		selcmp((Ref[2]){r, CON_Z}, Kw, 0, fn);
 		b->jmp.type = Jjf + Cine;
 	}
