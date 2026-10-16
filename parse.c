@@ -986,7 +986,7 @@ parsefields(Field *fld, Typ *ty, int t)
 			type = FTyp;
 			ty1 = &typ[findtyp(ntyp-1)];
 			s = ty1->size;
-			a = ty1->align;
+			a = ty1->align < 0 ? 0 : ty1->align;
 			break;
 		}
 		if (a > al)
