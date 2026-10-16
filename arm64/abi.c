@@ -272,6 +272,11 @@ argsclass(Ins *i0, Ins *i1, Class *carg)
 				ngp--;
 			}
 			typclass(c, &typ[i->arg[0].val], gp, fp);
+			if (va && !(c->class & Cptr)) {
+				/* Apple arm64: a variadic aggregate is in the stack slots, like every variadic argument */
+				c->class = Cstk;
+				break;
+			}
 			if (c->ngp <= ngp) {
 				if (c->nfp <= nfp) {
 					ngp -= c->ngp;
