@@ -377,12 +377,20 @@ align(uint x, uint al)
 	return (x + al-1) & -al;
 }
 
+static int
+isthrarg(Ref r, Fn *fn)
+{
+	return T.apple && rtype(r) == RCon && fn->con[r.val].type == CAddr
+		&& (fn->con[r.val].sym.type & SThr);
+}
+
 static void
 selcall(Fn *fn, Ins *i0, Ins *i1, Insl **ilp)
 {
+	struct { Ref orig, tmp; } tlv[64];
 	Ins *i;
 	Class *ca, *c, cr;
-	int op, cty;
+	int op, cty, ntlv;
 	uint n, stk, off;;
 	Ref r, rstk, tmp[4];
 
@@ -440,6 +448,22 @@ selcall(Fn *fn, Ins *i0, Ins *i1, Insl **ilp)
 		/* struct return argument */
 		emit(Ocopy, Kl, TMP(R8), i1->to, R);
 
+	/* An Apple thread-local address is a call to the TLS accessor, and it clobbers the caller-saved argument registers.
+	 * Its address is copied to a temporary first, and that copy is emitted after the register copies below, so it comes
+	 * before them in program order and no argument register is set before the accessor call. */
+	ntlv = 0;
+	for (i=i0, c=ca; i<i1; i++, c++) {
+		if ((c->class & Cstk) != 0)
+			continue;
+		if ((i->op == Oarg || i->op == Oarge || isargbh(i->op)) && isthrarg(i->arg[0], fn)) {
+			assert(ntlv < sizeof tlv / sizeof tlv[0]);
+			tlv[ntlv].orig = i->arg[0];
+			tlv[ntlv].tmp = newtmp("abi", Kl, fn);
+			i->arg[0] = tlv[ntlv].tmp;
+			ntlv++;
+		}
+	}
+
 	for (i=i0, c=ca; i<i1; i++, c++) {
 		if ((c->class & Cstk) != 0)
 			continue;
@@ -448,6 +472,8 @@ selcall(Fn *fn, Ins *i0, Ins *i1, Insl **ilp)
 		if (i->op == Oargc)
 			ldregs(c->reg, c->cls, c->nreg, i->arg[1], fn);
 	}
+	for (n=0; n<ntlv; n++)
+		emit(Ocopy, Kl, tlv[n].tmp, tlv[n].orig, R);
 
 	/* populate the stack */
 	off = 0;
