@@ -267,11 +267,15 @@ argsclass(Ins *i0, Ins *i1, Class *carg)
 		case Oparc:
 		case Oargc:
 			/* AAPCS64: an aggregate with 16-byte alignment starts at an even general register */
-			if (typ[i->arg[0].val].align > 3 && (gp-gpreg) & 1 && ngp > 0) {
+			typclass(c, &typ[i->arg[0].val], gp, fp);
+			/* only an aggregate passed in registers starts at an even register; one passed by pointer
+			 * (Cptr) is an ordinary 8-byte argument, and skipping a register for it leaves that register
+			 * live at entry (spill.c) and counted by the call */
+			if (!(c->class & (Cptr|Cstk)) && typ[i->arg[0].val].align > 3 && (gp-gpreg) & 1 && ngp > 0) {
 				gp++;
 				ngp--;
+				typclass(c, &typ[i->arg[0].val], gp, fp);
 			}
-			typclass(c, &typ[i->arg[0].val], gp, fp);
 			if (va && !(c->class & Cptr)) {
 				/* Apple arm64: a variadic aggregate is in the stack slots, like every variadic argument */
 				c->class = Cstk;
