@@ -26,6 +26,7 @@ amd64_memargs(int op)
 
 Target T_amd64_sysv = {
 	.name = "amd64_sysv",
+	.blitcall = 1,
 	.emitfin = elf_emitfin,
 	.asloc = ".L",
 	.abi1 = amd64_sysv_abi,
@@ -39,6 +40,7 @@ Target T_amd64_sysv = {
 
 Target T_amd64_apple = {
 	.name = "amd64_apple",
+	.blitcall = 1,
 	.apple = 1,
 	.emitfin = macho_emitfin,
 	.asloc = "L",
