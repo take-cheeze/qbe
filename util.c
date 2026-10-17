@@ -551,10 +551,17 @@ salloc(Ref rt, Ref rs, Fn *fn)
 	fn->dynalloc = 1;
 	if (rtype(rs) == RCon) {
 		sz = fn->con[rs.val].bits.i;
-		if (sz < 0 || sz >= INT_MAX-15)
+		if (sz < 0)
 			err("invalid alloc size %"PRId64, sz);
 		sz = (sz + 15)  & -16;
-		emit(Osalloc, Kl, rt, getcon(sz, fn), R);
+		if (sz < INT_MAX-15) {
+			emit(Osalloc, Kl, rt, getcon(sz, fn), R);
+		} else {
+			/* too large for the immediate of a subq: the size goes through a register */
+			r0 = newtmp("isel", Kl, fn);
+			emit(Osalloc, Kl, rt, r0, R);
+			emit(Ocopy, Kl, r0, getcon(sz, fn), R);
+		}
 	} else {
 		/* r0 = (r + 15) & -16 */
 		r0 = newtmp("isel", Kl, fn);
