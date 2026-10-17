@@ -306,6 +306,14 @@ loadaddr(Con *c, char *rn, E *e)
 
 	l = str(c->sym.id);
 	p = l[0] == '"' ? "" : T.assym;
+	if (T.apple && c->sym.type == SGlo && (c->bits.i > 4095 || c->bits.i < -4095)) {
+		/* a page relocation with the addend: the assembler emits ARM64_RELOC_ADDEND before PAGE21 and PAGEOFF12, and
+		 * ld64 resolves sym+off to the address the 12-bit form below gives for smaller offsets */
+		fprintf(e->f, "\tadrp\t%s, %s%s%+"PRIi64"@page\n"
+		              "\tadd\t%s, %s, %s%s%+"PRIi64"@pageoff\n",
+		        rn, p, l, c->bits.i, rn, rn, p, l, c->bits.i);
+		return;
+	}
 	for (; *s; s++)
 		switch (*s) {
 		default:
@@ -326,8 +334,6 @@ loadaddr(Con *c, char *rn, E *e)
 		}
 	if (T.apple && c->sym.type == SGlo && c->bits.i) {
 		int64_t o = c->bits.i;
-		if (o > 4095 || o < -4095)
-			die("large address offset on Apple arm64");
 		if (o > 0)
 			fprintf(e->f, "\tadd\t%s, %s, #%"PRIi64"\n", rn, rn, o);
 		else
