@@ -495,8 +495,19 @@ spill(Fn *fn)
 			if (r)
 				sethint(v, r);
 		}
-		if (b == fn->start)
+		if (b == fn->start) {
+			/* DEBUG (not for commit): name the function and the temporaries live at entry that should not be */
+			if (v->t[0] != (T.rglob | fn->reg)) {
+				bits d = v->t[0] ^ (T.rglob | fn->reg);
+				int k;
+				fprintf(stderr, "DEBUG spill: fn=%s entry-live-diff=%llx\n", fn->name, (unsigned long long)d);
+				for (k=0; k<NBit; k++)
+					if (d & BIT(k))
+						fprintf(stderr, "DEBUG   tmp %d %s ndef=%u nuse=%u %s\n", k, k < Tmp0 ? "(reg)" : tmp[k].name,
+							k < Tmp0 ? 0 : tmp[k].ndef, k < Tmp0 ? 0 : tmp[k].nuse, (v->t[0] & BIT(k)) ? "live-in" : "not-live");
+			}
 			assert(v->t[0] == (T.rglob | fn->reg));
+		}
 		else
 			assert(v->t[0] == T.rglob);
 
