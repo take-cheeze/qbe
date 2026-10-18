@@ -63,6 +63,7 @@ struct Target {
 	char asloc[4];
 	char assym[4];
 	uint cansel:1;
+	uint blitcall:1; /* a large block copy is a call to memmove: the target's argregs and CALL encoding are the sysv ones */
 };
 
 #define BIT(n) ((bits)1 << (n))

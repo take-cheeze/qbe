@@ -1,5 +1,10 @@
 #include "all.h"
 
+/* Copies larger than this are a call to memmove. Expanded, each 8-byte word costs three temporaries, and the
+ * liveness and spill sets are sized by the temporaries of the function: a 512 KB copy (the [u8; N] results of
+ * the hex crate) made 196k temporaries in four blocks, and QBE ran out of memory. */
+#define BLITMAX 128
+
 static void
 blit(Ref sd[2], int sz, Fn *fn)
 {
@@ -9,11 +14,31 @@ blit(Ref sd[2], int sz, Fn *fn)
 		{ Ostoreh, Oloaduh, Kw, 2 },
 		{ Ostoreb, Oloadub, Kw, 1 }
 	};
+	Con c;
 	Ref r, r1, ro;
 	int off, fwd, n;
 
 	fwd = sz >= 0;
 	sz = abs(sz);
+	if (sz > BLITMAX && T.blitcall) {
+		/* A call to memmove, not memcpy: sz is negative for an overlapping backward copy, and memmove covers both.
+		 * The arguments go in the first three integer argument registers (CALL: ni = 3 in bits 4 to 7, and the
+		 * result register bit 0, as selcall gives a void call). The copy from the result register right after the
+		 * call is what spill looks for to know the argument registers are live over the call. emit() fills the
+		 * block backwards, so the copies are emitted last to first. */
+		memset(&c, 0, sizeof c);
+		c.type = CAddr;
+		c.sym.id = intern("memmove");
+		r = newtmp("blt", Kl, fn);
+		emit(Ocopy, Kw, R, TMP(T.gpr0), R);
+		emit(Ocall, Kw, R, newcon(&c, fn), CALL(3 << 4 | 1));
+		emit(Ocopy, Kl, TMP(T.rsave[2]), r, R);
+		emit(Ocopy, Kl, TMP(T.rsave[1]), sd[0], R);
+		emit(Ocopy, Kl, TMP(T.rsave[0]), sd[1], R);
+		emit(Ocopy, Kl, r, getcon(sz, fn), R);
+		fn->leaf = 0;
+		return;
+	}
 	off = fwd ? sz : 0;
 	for (p=tbl; sz; p++)
 		for (n=p->size; sz>=n; sz-=n) {
