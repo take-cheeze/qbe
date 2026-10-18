@@ -1,6 +1,9 @@
 #include "all.h"
 #include <limits.h>
 
+/* allocs of this many bytes or more are dynamic, not fixed frame slots (see the slot loop in amd64_isel) */
+#define BIGSLOT (1 << 20)
+
 /* For x86_64, do the following:
  *
  * - check that constants are used only in
@@ -915,8 +918,12 @@ amd64_isel(Fn *fn)
 				if (rtype(i->arg[0]) != RCon)
 					break;
 				sz = fn->con[i->arg[0].val].bits.i;
-				if (sz < 0 || sz >= INT_MAX-15)
+				if (sz < 0)
 					err("invalid alloc size %"PRId64, sz);
+				/* a large fixed slot would need frame offsets beyond the 32-bit displacements: the
+				 * alloc stays an Oalloc and salloc makes it a dynamic allocation (rsp moves) */
+				if (sz >= BIGSLOT)
+					continue;
 				sz = (sz + n-1) & -n;
 				sz /= 4;
 				if (sz > INT_MAX - fn->slot)
