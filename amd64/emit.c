@@ -670,16 +670,23 @@ amd64_sysv_emitfn(Fn *fn, FILE *f)
 	static int id0;
 	Blk *b, *s;
 	Ins *i, itmp;
-	int *r, c, o, n, lbl;
+	int *r, c, o, n, lbl, unw;
 	uint p;
 	E *e;
 
 	e = &(E){.f = f, .fn = fn};
+	/* DWARF CFI for functions that make calls: a C++ throw unwinds through them. Leaf functions make no
+	   calls, so no unwinder stops inside them. Apple targets use their own unwind format, not emitted here. */
+	unw = !T.apple && !fn->leaf;
 	emitfnlnk(fn->name, &fn->lnk, f);
+	if (unw)
+		fputs("\t.cfi_startproc\n", f);
 	fputs("\tendbr64\n", f);
 	if (!fn->leaf || fn->vararg || fn->dynalloc) {
 		e->fp = RBP;
 		fputs("\tpushq %rbp\n\tmovq %rsp, %rbp\n", f);
+		if (unw)
+			fputs("\t.cfi_def_cfa_offset 16\n\t.cfi_offset %rbp, -16\n\t.cfi_def_cfa_register %rbp\n", f);
 	} else
 		e->fp = RSP;
 	sysv_framesz(e);
@@ -697,6 +704,10 @@ amd64_sysv_emitfn(Fn *fn, FILE *f)
 			itmp.arg[0] = TMP(*r);
 			emitf("pushq %L0", &itmp, e);
 			e->nclob++;
+			/* The k-th push is below the frame, at CFA - (16 + fsz + 8k) with the rbp frame. */
+			if (unw)
+				fprintf(f, "\t.cfi_offset %%%s, %d\n", rname[*r][0],
+					-(int)(16 + e->fsz + 8 * e->nclob));
 		}
 
 	for (lbl=0, b=fn->start; b; b=b->link) {
@@ -716,6 +727,9 @@ amd64_sysv_emitfn(Fn *fn, FILE *f)
 			fprintf(f, "\tud2\n");
 			break;
 		case Jret0:
+			/* The epilogue changes the CFA rules; the body's rules are restored after the ret. */
+			if (unw)
+				fputs("\t.cfi_remember_state\n", f);
 			if (fn->dynalloc)
 				fprintf(f,
 					"\tmovq %%rbp, %%rsp\n"
@@ -733,6 +747,8 @@ amd64_sysv_emitfn(Fn *fn, FILE *f)
 					"\taddq $%"PRIu64", %%rsp\n",
 					e->fsz);
 			fputs("\tret\n", f);
+			if (unw)
+				fputs("\t.cfi_restore_state\n", f);
 			break;
 		case Jjmp:
 		Jmp:
@@ -760,6 +776,8 @@ amd64_sysv_emitfn(Fn *fn, FILE *f)
 		}
 	}
 	id0 += fn->nblk;
+	if (unw)
+		fputs("\t.cfi_endproc\n", f);
 	if (!T.apple)
 		elf_emitfnfin(fn->name, f);
 }

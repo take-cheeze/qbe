@@ -568,7 +568,7 @@ arm64_emitfn(Fn *fn, FILE *out)
 	#undef X
 	};
 	static int id0;
-	int s, n, c, lbl, *r;
+	int s, n, c, lbl, unw, *r;
 	uint64_t o;
 	Blk *b, *t;
 	Ins *i;
@@ -577,7 +577,11 @@ arm64_emitfn(Fn *fn, FILE *out)
 	e = &(E){.f = out, .fn = fn};
 	if (T.apple)
 		e->fn->lnk.align = 4;
+	/* DWARF CFI for functions that make calls (see amd64_sysv_emitfn); Apple targets are not covered. */
+	unw = !T.apple && !fn->leaf;
 	emitfnlnk(e->fn->name, &e->fn->lnk, e->f);
+	if (unw)
+		fputs("\t.cfi_startproc\n", e->f);
 	fputs("\thint\t#34\n", e->f);
 	framelayout(e);
 
@@ -615,6 +619,17 @@ arm64_emitfn(Fn *fn, FILE *out)
 			e->frame & 0xFFFF, e->frame >> 16
 		);
 	fputs("\tmov\tx29, sp\n", e->f);
+	/* CFA = x29 + o: the frame and the saved x29/x30 pair, plus the varargs save area below the frame. */
+	o = e->frame + 16;
+	if (e->fn->vararg && !T.apple)
+		o += 192;
+	if (unw)
+		fprintf(e->f,
+			"\t.cfi_def_cfa x29, %"PRIu64"\n"
+			"\t.cfi_offset x29, -%"PRIu64"\n"
+			"\t.cfi_offset x30, -%"PRIu64"\n",
+			o, o, o - 8
+		);
 	s = (e->frame - e->padding) / 4;
 	for (r=arm64_rclob; *r>=0; r++)
 		if (e->fn->reg & BIT(*r)) {
@@ -622,6 +637,10 @@ arm64_emitfn(Fn *fn, FILE *out)
 			i = &(Ins){.arg = {TMP(*r), SLOT(s)}};
 			i->op = *r >= V0 ? Ostored : Ostorel;
 			emitins(i, e);
+			if (unw)
+				fprintf(e->f, "\t.cfi_offset %s, %"PRId64"\n",
+					rname(*r, *r >= V0 ? Kd : Kl),
+					(int64_t)slot(i->arg[1], e) - (int64_t)o);
 		}
 
 	for (lbl=0, b=e->fn->start; b; b=b->link) {
@@ -635,6 +654,9 @@ arm64_emitfn(Fn *fn, FILE *out)
 			fprintf(e->f, "\tbrk\t#1000\n");
 			break;
 		case Jret0:
+			/* The epilogue changes the CFA rules; the body's rules are restored after the ret. */
+			if (unw)
+				fprintf(e->f, "\t.cfi_remember_state\n");
 			s = (e->frame - e->padding) / 4;
 			for (r=arm64_rclob; *r>=0; r++)
 				if (e->fn->reg & BIT(*r)) {
@@ -675,6 +697,8 @@ arm64_emitfn(Fn *fn, FILE *out)
 					(o - 16) & 0xFFFF, (o - 16) >> 16
 				);
 			fprintf(e->f, "\tret\n");
+			if (unw)
+				fprintf(e->f, "\t.cfi_restore_state\n");
 			break;
 		case Jjmp:
 		Jmp:
@@ -705,6 +729,8 @@ arm64_emitfn(Fn *fn, FILE *out)
 		}
 	}
 	id0 += e->fn->nblk;
+	if (unw)
+		fprintf(out, "\t.cfi_endproc\n");
 	if (!T.apple)
 		elf_emitfnfin(fn->name, out);
 }
