@@ -117,6 +117,7 @@ ehcsend(Fn *fn, Blk *b, FILE *f)
 void
 ehfnend(Fn *fn, FILE *f)
 {
+	static int persdef;   /* the personality's DW.ref, defined once per file (as gcc does) */
 	uint k, c;
 
 	if (!fn->eh_lp)
@@ -142,9 +143,11 @@ ehfnend(Fn *fn, FILE *f)
 			c, ehcur, c, c, ehcur, ehcur
 		);
 	}
-	fprintf(f,
-		".LEHCTe%u:\n"
-		"\t.text\n"
+	fprintf(f, ".LEHCTe%u:\n\t.text\n", ehcur);
+	if (persdef)
+		return;
+	persdef = 1;
+	fputs(
 		"\t.hidden DW.ref.__gcc_personality_v0\n"
 		"\t.weak DW.ref.__gcc_personality_v0\n"
 		"\t.section .data.rel.local.DW.ref.__gcc_personality_v0,\"awG\",@progbits,DW.ref.__gcc_personality_v0,comdat\n"
@@ -154,7 +157,7 @@ ehfnend(Fn *fn, FILE *f)
 		"DW.ref.__gcc_personality_v0:\n"
 		"\t.quad __gcc_personality_v0\n"
 		"\t.text\n",
-		ehcur
+		f
 	);
 }
 
