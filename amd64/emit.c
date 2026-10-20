@@ -681,6 +681,7 @@ amd64_sysv_emitfn(Fn *fn, FILE *f)
 	emitfnlnk(fn->name, &fn->lnk, f);
 	if (unw)
 		fputs("\t.cfi_startproc\n", f);
+	ehfnbegin(fn, f);
 	fputs("\tendbr64\n", f);
 	if (!fn->leaf || fn->vararg || fn->dynalloc) {
 		e->fp = RBP;
@@ -711,6 +712,7 @@ amd64_sysv_emitfn(Fn *fn, FILE *f)
 		}
 
 	for (lbl=0, b=fn->start; b; b=b->link) {
+		ehlpbegin(fn, b, f);
 		if (lbl || b->npred > 1) {
 			for (p=0; p<b->npred; p++)
 				if (b->pred[p]->id >= b->id)
@@ -719,8 +721,13 @@ amd64_sysv_emitfn(Fn *fn, FILE *f)
 				fprintf(f, ".p2align 4\n");
 			fprintf(f, "%sbb%d:\n", T.asloc, id0+b->id);
 		}
-		for (i=b->ins; i!=&b->ins[b->nins]; i++)
+		for (i=b->ins; i!=&b->ins[b->nins]; i++) {
+			if (i->op == Ocall)
+				ehcsbegin(fn, b, f);
 			emitins(*i, e);
+			if (i->op == Ocall)
+				ehcsend(fn, b, f);
+		}
 		lbl = 1;
 		switch (b->jmp.type) {
 		case Jhlt:
@@ -780,6 +787,7 @@ amd64_sysv_emitfn(Fn *fn, FILE *f)
 		fputs("\t.cfi_endproc\n", f);
 	if (!T.apple)
 		elf_emitfnfin(fn->name, f);
+	ehfnend(fn, f);
 }
 
 static void

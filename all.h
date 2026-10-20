@@ -399,6 +399,7 @@ struct Lnk {
 
 struct Fn {
 	Blk *start;
+	Blk *eh_lp;  /* the landing pad (a block labeled eh.lp): unwound calls of the function enter it */
 	Tmp *tmp;
 	Con *con;
 	Mem *mem;
@@ -626,6 +627,11 @@ void emitdat(Dat *, FILE *);
 void emitdbgfile(char *, FILE *);
 void emitdbgloc(uint, uint, FILE *);
 int stashbits(bits, int);
+void ehfnbegin(Fn *, FILE *);
+void ehlpbegin(Fn *, Blk *, FILE *);
+void ehcsbegin(Fn *, Blk *, FILE *);
+void ehcsend(Fn *, Blk *, FILE *);
+void ehfnend(Fn *, FILE *);
 void elf_emitfnfin(char *, FILE *);
 void elf_emitfin(FILE *);
 void macho_emitfin(FILE *);

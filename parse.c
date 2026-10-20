@@ -952,8 +952,15 @@ parsefn(Lnk *lnk)
 	curf->nmem = 0;
 	curf->nblk = nblk;
 	curf->rpo = vnew(nblk, sizeof curf->rpo[0], PFn);
-	for (b=curf->start; b; b=b->link)
+	curf->eh_lp = 0;
+	for (b=curf->start; b; b=b->link) {
 		b->dlink = 0; /* was trashed by findblk() */
+		if (strcmp(b->name, "eh.lp") == 0) {
+			if (curf->eh_lp)
+				err("multiple landing pads in @%s", curf->name);
+			curf->eh_lp = b;
+		}
+	}
 	for (i=0; i<BMask+1; ++i)
 		blkh[i] = 0;
 	memset(tmph, 0, tmphcap * sizeof tmph[0]);

@@ -58,6 +58,106 @@ emitfnlnk(char *n, Lnk *l, FILE *f)
 	emitlnk(n, l, SecText, f);
 }
 
+/* Landing pads (fn->eh_lp, the block labeled eh.lp; live.c). The system unwinder enters the pad at a call of the function
+   that a throw unwinds, and the pad resumes the unwind (cproc's cleanup lowering, nfcxx). The call sites and their pad are
+   in the function's LSDA (.gcc_except_table), which the personality reads: gcc's __gcc_personality_v0, which with no
+   catch types treats a call site with action 0 as a cleanup. The landing pads use DW_EH_PE_* offsets from the function. */
+static uint ehnext, ehcur, ehcs;   /* numbers of the functions with a pad, of the current one, and of its call sites */
+static uint *ehcsv;                /* the current function's call sites */
+static uint nehcsv, ehcsvcap;
+
+void
+ehfnbegin(Fn *fn, FILE *f)
+{
+	if (!fn->eh_lp)
+		return;
+	if (T.apple)
+		die("landing pads need ELF unwind tables (no Apple target)");
+	ehcur = ++ehnext;
+	nehcsv = 0;
+	fprintf(f,
+		".LEHfs%u:\n"
+		"\t.cfi_personality 0x9b, DW.ref.__gcc_personality_v0\n"
+		"\t.cfi_lsda 0x1b, .LEHL%u\n",
+		ehcur, ehcur
+	);
+}
+
+void
+ehlpbegin(Fn *fn, Blk *b, FILE *f)
+{
+	if (b == fn->eh_lp)
+		fprintf(f, ".LEHlp%u:\n", ehcur);
+}
+
+/* a call of the function, outside its landing pad: its address range is a call site of the LSDA */
+void
+ehcsbegin(Fn *fn, Blk *b, FILE *f)
+{
+	if (!fn->eh_lp || b == fn->eh_lp)
+		return;
+	if (nehcsv == ehcsvcap) {
+		ehcsvcap = ehcsvcap ? 2 * ehcsvcap : 16;
+		ehcsv = realloc(ehcsv, ehcsvcap * sizeof ehcsv[0]);
+		if (!ehcsv)
+			die("out of memory");
+	}
+	ehcsv[nehcsv++] = ++ehcs;
+	fprintf(f, ".LEHcsb%u:\n", ehcs);
+}
+
+void
+ehcsend(Fn *fn, Blk *b, FILE *f)
+{
+	if (!fn->eh_lp || b == fn->eh_lp)
+		return;
+	fprintf(f, ".LEHcse%u:\n", ehcsv[nehcsv-1]);
+}
+
+void
+ehfnend(Fn *fn, FILE *f)
+{
+	uint k, c;
+
+	if (!fn->eh_lp)
+		return;
+	fprintf(f,
+		"\t.section .gcc_except_table,\"a\",@progbits\n"
+		"\t.p2align 2\n"
+		".LEHL%u:\n"
+		"\t.byte 0xff\n"          /* no LPStart: the pads are offsets from the function */
+		"\t.byte 0xff\n"          /* no types table: no catch clauses */
+		"\t.byte 0x01\n"          /* call sites: uleb128 */
+		"\t.uleb128 .LEHCTe%u-.LEHCTb%u\n"
+		".LEHCTb%u:\n",
+		ehcur, ehcur, ehcur, ehcur
+	);
+	for (k=0; k<nehcsv; k++) {
+		c = ehcsv[k];
+		fprintf(f,
+			"\t.uleb128 .LEHcsb%u-.LEHfs%u\n"
+			"\t.uleb128 .LEHcse%u-.LEHcsb%u\n"
+			"\t.uleb128 .LEHlp%u-.LEHfs%u\n"
+			"\t.uleb128 0\n",
+			c, ehcur, c, c, ehcur, ehcur
+		);
+	}
+	fprintf(f,
+		".LEHCTe%u:\n"
+		"\t.text\n"
+		"\t.hidden DW.ref.__gcc_personality_v0\n"
+		"\t.weak DW.ref.__gcc_personality_v0\n"
+		"\t.section .data.rel.local.DW.ref.__gcc_personality_v0,\"awG\",@progbits,DW.ref.__gcc_personality_v0,comdat\n"
+		"\t.p2align 3\n"
+		"\t.type DW.ref.__gcc_personality_v0, @object\n"
+		"\t.size DW.ref.__gcc_personality_v0, 8\n"
+		"DW.ref.__gcc_personality_v0:\n"
+		"\t.quad __gcc_personality_v0\n"
+		"\t.text\n",
+		ehcur
+	);
+}
+
 void
 emitdat(Dat *d, FILE *f)
 {
