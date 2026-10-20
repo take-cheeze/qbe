@@ -153,6 +153,10 @@ filldom(Fn *fn)
 		for (n=1; n<fn->nblk; n++) {
 			b = fn->rpo[n];
 			d = 0;
+			/* the landing pad (eh.lp) has no predecessors: the unwinder enters it. It uses only the entry block's values
+			 * (nfcxx), so the entry dominates it */
+			if (b == fn->eh_lp)
+				d = fn->start;
 			for (p=0; p<b->npred; p++)
 				if (b->pred[p]->idom
 				||  b->pred[p] == fn->start)
