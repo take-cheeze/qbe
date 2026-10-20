@@ -88,6 +88,7 @@ fillrpo(Fn *f)
 		b->id = -1u;
 	f->nblk = 0;
 	porec(f->start, &f->nblk);
+	porec(f->eh_lp, &f->nblk);
 	vgrow(&f->rpo, f->nblk);
 	for (p=&f->start; (b=*p);) {
 		if (b->id == -1u) {

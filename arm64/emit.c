@@ -582,6 +582,7 @@ arm64_emitfn(Fn *fn, FILE *out)
 	emitfnlnk(e->fn->name, &e->fn->lnk, e->f);
 	if (unw)
 		fputs("\t.cfi_startproc\n", e->f);
+	ehfnbegin(e->fn, e->f);
 	fputs("\thint\t#34\n", e->f);
 	framelayout(e);
 
@@ -644,10 +645,16 @@ arm64_emitfn(Fn *fn, FILE *out)
 		}
 
 	for (lbl=0, b=e->fn->start; b; b=b->link) {
+		ehlpbegin(e->fn, b, e->f);
 		if (lbl || b->npred > 1)
 			fprintf(e->f, "%s%d:\n", T.asloc, id0+b->id);
-		for (i=b->ins; i!=&b->ins[b->nins]; i++)
+		for (i=b->ins; i!=&b->ins[b->nins]; i++) {
+			if (i->op == Ocall)
+				ehcsbegin(e->fn, b, e->f);
 			emitins(i, e);
+			if (i->op == Ocall)
+				ehcsend(e->fn, b, e->f);
+		}
 		lbl = 1;
 		switch (b->jmp.type) {
 		case Jhlt:
@@ -733,4 +740,5 @@ arm64_emitfn(Fn *fn, FILE *out)
 		fprintf(out, "\t.cfi_endproc\n");
 	if (!T.apple)
 		elf_emitfnfin(fn->name, out);
+	ehfnend(fn, out);
 }

@@ -19,6 +19,19 @@ liveon(BSet *v, Blk *b, Blk *s)
 			}
 }
 
+/* a block that makes a call: an unwinder can leave the call for the function's landing pad (fn->eh_lp), so the values the
+   pad uses are live across the call (in callee-saved registers or spilled, as with any value live across a call) */
+static int
+blkhascall(Blk *b)
+{
+	Ins *i;
+
+	for (i=b->ins; i!=&b->ins[b->nins]; i++)
+		if (i->op == Ocall)
+			return 1;
+	return 0;
+}
+
 static void
 bset(Ref r, Blk *b, int *nlv, Tmp *tmp)
 {
@@ -63,6 +76,10 @@ Again:
 		}
 		if (b->s2) {
 			liveon(v, b, b->s2);
+			bsunion(b->out, v);
+		}
+		if (f->eh_lp && b != f->eh_lp && blkhascall(b)) {
+			liveon(v, b, f->eh_lp);
 			bsunion(b->out, v);
 		}
 		chg |= !bsequal(b->out, u);
