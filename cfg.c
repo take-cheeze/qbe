@@ -87,8 +87,9 @@ fillrpo(Fn *f)
 	for (b=f->start; b; b=b->link)
 		b->id = -1u;
 	f->nblk = 0;
-	porec(f->start, &f->nblk);
+	/* the landing pad first: the entry must keep the smallest RPO number, as the entry dominates every block (sdom) */
 	porec(f->eh_lp, &f->nblk);
+	porec(f->start, &f->nblk);
 	vgrow(&f->rpo, f->nblk);
 	for (p=&f->start; (b=*p);) {
 		if (b->id == -1u) {
