@@ -282,7 +282,7 @@ loadaddr(Con *c, char *rn, E *e)
 		break;
 	case SExtThr:
 		if (!T.apple)
-			die("extern thread unavailable on arm64");
+			break;  /* ELF: the initial-exec sequence below, after the names are made */
 		/* fall through */
 	case SThr:
 		if (T.apple)
@@ -306,6 +306,19 @@ loadaddr(Con *c, char *rn, E *e)
 
 	l = str(c->sym.id);
 	p = l[0] == '"' ? "" : T.assym;
+	if (c->sym.type == SExtThr && !T.apple) {
+		/* ELF, initial-exec: the variable's offset from the thread pointer is in its GOT entry (libstdc++'s and
+		 * libc's thread_local variables live in shared objects). The scratch is x16, or x17 when the destination is
+		 * x16; the destination takes the sum last. */
+		char *t = strcmp(rn, "x16") == 0 ? "x17" : "x16";
+		assert(c->bits.i == 0);
+		fprintf(e->f, "\tmrs\t%s, tpidr_el0\n"
+		              "\tadrp\t%s, :gottprel:%s%s\n"
+		              "\tldr\t%s, [%s, #:gottprel_lo12:%s%s]\n"
+		              "\tadd\t%s, %s, %s\n",
+		        rn, t, p, l, t, t, p, l, rn, rn, t);
+		return;
+	}
 	if (T.apple && c->sym.type == SGlo && (c->bits.i > 4095 || c->bits.i < -4095)) {
 		/* a page relocation with the addend: the assembler emits ARM64_RELOC_ADDEND before PAGE21 and PAGEOFF12, and
 		 * ld64 resolves sym+off to the address the 12-bit form below gives for smaller offsets */
