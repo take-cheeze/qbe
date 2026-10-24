@@ -392,7 +392,7 @@ struct Lnk {
 	char export;
 	char thread;
 	char common;
-	char align;
+	int align;
 	char *sec;
 	char *secf;
 };
