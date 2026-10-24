@@ -1,0 +1,53 @@
+# aggregates aligned on more than 16:
+# returned through an aligned pad, and
+# passed on the stack aligned on 16
+
+type :cp = align 128 { l }
+type :g = align 128 { l, b 120, :cp }
+
+export function :g $mk(l %l, l %x) {
+@start
+	%p =l alloc16 256
+	storel %l, %p
+	%q =l add %p, 128
+	storel %x, %q
+	ret %p
+}
+
+export function l $take(w %a, :g %g, w %b) {
+@start
+	%l =l loadl %g
+	%q =l add %g, 128
+	%x =l loadl %q
+	%a1 =l extsw %a
+	%b1 =l extsw %b
+	%r =l mul %a1, 1000
+	%t =l mul %l, 100
+	%r =l add %r, %t
+	%t =l mul %x, 10
+	%r =l add %r, %t
+	%r =l add %r, %b1
+	ret %r
+}
+
+export function l $call() {
+@start
+	%g =:g call $dmk(l 5, l 7)
+	%v =l call $dtake(w 1, :g %g, w 2)
+	%m =l and %g, 127
+	%v =l add %v, %m
+	ret %v
+}
+
+# >>> driver
+# struct cp { long x; } __attribute__((aligned(128)));
+# struct g { long l; struct cp e; };
+# extern struct g mk(long, long);
+# extern long take(int, struct g, int);
+# extern long call(void);
+# struct g dmk(long l, long x) { struct g g = { l, { x } }; return g; }
+# long dtake(int a, struct g g, int b) { return a*1000 + g.l*100 + g.e.x*10 + b; }
+# int main(void) {
+# 	return !(take(1, mk(5, 7), 2) == 1572 && call() == 1572);
+# }
+# <<<

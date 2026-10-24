@@ -302,9 +302,9 @@ rarg(int ty, int *ni, int *ns)
 static void
 selcall(Fn *fn, Ins *i0, Ins *i1, RAlloc **rap)
 {
-	Ins *i;
+	Ins *i, ains[3];
 	AClass *ac, *a, aret;
-	int ca, ni, ns, al;
+	int ca, ni, ns, al, n;
 	uint stk, off;
 	Ref r, r1, r2, reg[2], env;
 	RAlloc *ra;
@@ -321,10 +321,12 @@ selcall(Fn *fn, Ins *i0, Ins *i1, RAlloc **rap)
 
 	for (stk=0, a=&ac[i1-i0]; a>ac;)
 		if ((--a)->inmem) {
-			if (a->align > 4)
-				err("sysv abi requires alignments of 16 or less");
+			/* a stack argument aligned on more
+			 * than 16 is placed as one on 16,
+			 * as gcc does since 4.6
+			 */
 			stk += a->size;
-			if (a->align == 4)
+			if (a->align >= 4)
 				stk += stk & 15;
 		}
 	stk += stk & 15;
@@ -360,12 +362,13 @@ selcall(Fn *fn, Ins *i0, Ins *i1, RAlloc **rap)
 			r1 = i1->to;
 		}
 		/* allocate return pad */
-		ra = alloc(sizeof *ra);
-		/* specific to NAlign == 3 */
-		al = aret.align >= 2 ? aret.align - 2 : 0;
-		ra->i = (Ins){Oalloc+al, Kl, r1, {getcon(aret.size, fn)}};
-		ra->link = (*rap);
-		*rap = ra;
+		n = stkalloc(ains, r1, aret.align, aret.size, fn);
+		for (al=0; al<n; al++) {
+			ra = alloc(sizeof *ra);
+			ra->i = ains[al];
+			ra->link = (*rap);
+			*rap = ra;
+		}
 	} else {
 		ra = 0;
 		if (KBASE(i1->cls) == 0) {
@@ -413,7 +416,7 @@ selcall(Fn *fn, Ins *i0, Ins *i1, RAlloc **rap)
 			continue;
 		r1 = newtmp("abi", Kl, fn);
 		if (i->op == Oargc) {
-			if (a->align == 4)
+			if (a->align >= 4)
 				off += off & 15;
 			emit(Oblit1, 0, R, INT(a->type->size), R);
 			emit(Oblit0, 0, R, i->arg[1], r1);
@@ -429,7 +432,7 @@ static int
 selpar(Fn *fn, Ins *i0, Ins *i1)
 {
 	AClass *ac, *a, aret;
-	Ins *i;
+	Ins *i, ains[3];
 	int ni, ns, s, al, fa;
 	Ref r, env;
 
@@ -456,9 +459,8 @@ selpar(Fn *fn, Ins *i0, Ins *i1)
 		}
 		a->ref[0] = newtmp("abi", Kl, fn);
 		emit(Ostorel, 0, R, a->ref[0], i->to);
-		/* specific to NAlign == 3 */
-		al = a->align >= 2 ? a->align - 2 : 0;
-		emit(Oalloc+al, Kl, i->to, getcon(a->size, fn), R);
+		for (al=stkalloc(ains, i->to, a->align, a->size, fn); al>0; al--)
+			emiti(ains[al-1]);
 	}
 
 	if (fn->retty >= 0 && aret.inmem) {
@@ -470,9 +472,7 @@ selpar(Fn *fn, Ins *i0, Ins *i1)
 	for (i=i0, a=ac, s=4; i<i1; i++, a++) {
 		switch (a->inmem) {
 		case 1:
-			if (a->align > 4)
-				err("sysv abi requires alignments of 16 or less");
-			if (a->align == 4)
+			if (a->align >= 4) /* see selcall */
 				s = (s+3) & -4;
 			fn->tmp[i->to.val].slot = -s;
 			s += a->size / 4;
