@@ -392,7 +392,7 @@ struct Lnk {
 	char export;
 	char thread;
 	char common;
-	char align;
+	int align;
 	char *sec;
 	char *secf;
 };
@@ -516,6 +516,7 @@ Ref getcon(int64_t, Fn *);
 int addcon(Con *, Con *, int);
 int isconbits(Fn *fn, Ref r, int64_t *v);
 void salloc(Ref, Ref, Fn *);
+int stkalloc(Ins *, Ref, int, uint64_t, Fn *);
 void dumpts(BSet *, Tmp *, FILE *);
 void runmatch(uchar *, Num *, Ref, Ref *);
 void bsinit(BSet *, uint);

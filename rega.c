@@ -15,17 +15,15 @@ struct RMap {
 	int n;
 };
 
-enum {
-	NPm = 64,      /* max copies in a parallel move */
-};
-
 static bits regu;      /* registers used */
 static Tmp *tmp;       /* function temporaries */
 static Mem *mem;       /* function mem references */
-static struct {
+typedef struct {
 	Ref src, dst;
 	int cls;
-} pm[NPm];             /* parallel move constructed */
+} PMove;
+static PMove *pm;      /* parallel move constructed (grows: a block
+                        * edge can need thousands of copies) */
 static int npm;        /* size of pm */
 static int loop;       /* current loop level */
 
@@ -194,8 +192,9 @@ mdump(RMap *m)
 static void
 pmadd(Ref src, Ref dst, int k)
 {
-	if (npm == NPm)
-		die("no more pm slots");
+	if (!pm)
+		pm = vnew(64, sizeof pm[0], PHeap);
+	vgrow(&pm, npm+1);
 	pm[npm].src = src;
 	pm[npm].dst = dst;
 	pm[npm].cls = k;
