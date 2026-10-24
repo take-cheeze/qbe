@@ -520,6 +520,18 @@ emitins(Ins i, E *e)
 			break;
 		}
 		if (rtype(i.to) == RSlot
+		&& (t0 == RSlot || t0 == RMem)
+		&& nofp && KBASE(i.cls) == 0) {
+			/* -n: no %xmm15; %rax, saved below the frame (the
+			 * slots are %rbp-relative under -n, emitfn) */
+			fputs("\tpushq %rax\n", e->f);
+			i.arg[1] = TMP(RAX);
+			emitf("mov%k %0, %1", &i, e);
+			emitf("mov%k %1, %=", &i, e);
+			fputs("\tpopq %rax\n", e->f);
+			break;
+		}
+		if (rtype(i.to) == RSlot
 		&& (t0 == RSlot || t0 == RMem)) {
 			i.cls = KWIDE(i.cls) ? Kd : Ks;
 			i.arg[1] = TMP(XMM0+15);
@@ -677,13 +689,13 @@ amd64_sysv_emitfn(Fn *fn, FILE *f)
 	e = &(E){.f = f, .fn = fn};
 	/* DWARF CFI for functions that make calls: a C++ throw unwinds through them. Leaf functions make no
 	   calls, so no unwinder stops inside them. Apple targets use their own unwind format, not emitted here. */
-	unw = !T.apple && !fn->leaf;
+	unw = !T.apple && !fn->leaf && !nounwind;   /* nfcxx -U: no unwind tables */
 	emitfnlnk(fn->name, &fn->lnk, f);
 	if (unw)
 		fputs("\t.cfi_startproc\n", f);
 	ehfnbegin(fn, f);
 	fputs("\tendbr64\n", f);
-	if (!fn->leaf || fn->vararg || fn->dynalloc) {
+	if (!fn->leaf || fn->vararg || fn->dynalloc || nofp) {
 		e->fp = RBP;
 		fputs("\tpushq %rbp\n\tmovq %rsp, %rbp\n", f);
 		if (unw)
@@ -697,7 +709,9 @@ amd64_sysv_emitfn(Fn *fn, FILE *f)
 		o = -176;
 		for (r=amd64_sysv_rsave; r<&amd64_sysv_rsave[6]; r++, o+=8)
 			fprintf(f, "\tmovq %%%s, %d(%%rbp)\n", rname[*r][0], o);
-		for (n=0; n<8; ++n, o+=16)
+		/* -n: no caller passes floating-point arguments
+		 * (the kernel's -mno-sse), so none are saved */
+		for (n=0; n<8 && !nofp; ++n, o+=16)
 			fprintf(f, "\tmovaps %%xmm%d, %d(%%rbp)\n", n, o);
 	}
 	for (r=amd64_sysv_rclob; r<&amd64_sysv_rclob[NCLR_SYSV]; r++)

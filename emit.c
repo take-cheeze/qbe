@@ -195,6 +195,15 @@ emitdat(Dat *d, FILE *f)
 			emitlnk(d->name, d->lnk, SecBss, f);
 			fprintf(f, "\t.fill %"PRId64",1,0\n", zero);
 		}
+		/* ELF symbol type and size, as gcc writes them for an object (nfcxx: the Linux kernel's build compares them) */
+		if (!d->lnk->common && !T.apple) {
+			p = d->name[0] == '"' ? "" : T.assym;
+			fprintf(f, ".type %s%s, @object\n", p, d->name);
+			if (zero != -1)
+				fprintf(f, ".size %s%s, %"PRId64"\n", p, d->name, zero);
+			else
+				fprintf(f, ".size %s%s, .-%s%s\n", p, d->name, p, d->name);
+		}
 		break;
 	case DZ:
 		if (zero != -1)

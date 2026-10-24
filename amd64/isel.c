@@ -125,14 +125,27 @@ fixarg(Ref *r, int k, Ins *i, Fn *fn)
 	}
 	else if (op != Ocall && hascon(r0, &c, fn)
 	&& c->type == CAddr && ((c->sym.type & SExt)
-	 || (T.apple && c->sym.type == SThr))) {
+	 || (T.apple && c->sym.type == SThr)
+	 /* nfcxx: a local symbol plus an offset a rip-relative
+	  * displacement may not reach (the kernel's
+	  * __pa_symbol(idt_table), idt_table + 2^31): the
+	  * address, then the offset added from a register */
+	 || (!(c->sym.type & SThr)
+	  && (c->bits.i >= 1 << 30 || c->bits.i <= -(1 << 30))))) {
 		r1 = newtmp("isel", Kl, fn);
 		if (c->bits.i) {
 			r2 = newtmp("isel", Kl, fn);
 			cc = (Con){.type = CBits};
 			cc.bits.i = c->bits.i;
 			r3 = newcon(&cc, fn);
-			emit(Oadd, Kl, r1, r2, r3);
+			if (c->bits.i < INT32_MIN || c->bits.i > INT32_MAX) {
+				/* nfcxx: an offset an add cannot take as an
+				 * immediate (the kernel's _end + 2^31) */
+				Ref r4 = newtmp("isel", Kl, fn);
+				emit(Oadd, Kl, r1, r2, r4);
+				emit(Ocopy, Kl, r4, r3, R);
+			} else
+				emit(Oadd, Kl, r1, r2, r3);
 		} else
 			r2 = r1;
 		if (T.apple && (c->sym.type & SThr)) {
