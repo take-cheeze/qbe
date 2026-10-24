@@ -100,9 +100,6 @@ typclass(Class *c, Typ *t, int *gp, int *fp)
 	c->nfp = 0;
 	c->align = 8;
 
-	if (t->align > 4)
-		err("alignments larger than 16 are not supported");
-
 	c->size = sz;
 	c->hfa.base = Kx;
 	c->ishfa = isfloatv(t, &c->hfa.base);
@@ -358,17 +355,18 @@ static void
 stkblob(Ref r, Class *c, Fn *fn, Insl **ilp)
 {
 	Insl *il;
-	int al;
+	Ins ins[3];
+	int i, n;
 	uint64_t sz;
 
-	il = alloc(sizeof *il);
-	al = c->t->align - 2; /* NAlign == 3 */
-	if (al < 0)
-		al = 0;
 	sz = c->class & Cptr ? c->t->size : c->size;
-	il->i = (Ins){Oalloc+al, Kl, r, {getcon(sz, fn)}};
-	il->link = *ilp;
-	*ilp = il;
+	n = stkalloc(ins, r, c->t->align, sz, fn);
+	for (i=0; i<n; i++) {
+		il = alloc(sizeof *il);
+		il->i = ins[i];
+		il->link = *ilp;
+		*ilp = il;
+	}
 }
 
 static uint
