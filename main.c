@@ -5,6 +5,8 @@
 
 Target T;
 
+int nofp;
+int nounwind;
 char debug['Z'+1] = {
 	['P'] = 0, /* parsing */
 	['M'] = 0, /* memory optimization */
@@ -137,7 +139,7 @@ main(int ac, char *av[])
 
 	T = Deftgt;
 	outf = stdout;
-	while ((c = getopt(ac, av, "hd:o:t:")) != -1)
+	while ((c = getopt(ac, av, "hd:no:t:U")) != -1)
 		switch (c) {
 		case 'd':
 			for (; *optarg; optarg++)
@@ -145,6 +147,12 @@ main(int ac, char *av[])
 					debug[toupper(*optarg)] = 1;
 					dbg = 1;
 				}
+			break;
+		case 'n':
+			nofp = 1;
+			break;
+		case 'U':
+			nounwind = 1;
 			break;
 		case 'o':
 			if (strcmp(optarg, "-") != 0) {
@@ -177,6 +185,8 @@ main(int ac, char *av[])
 			fprintf(hf, "%s [OPTIONS] {file.ssa, -}\n", av[0]);
 			fprintf(hf, "\t%-11s prints this help\n", "-h");
 			fprintf(hf, "\t%-11s output to file\n", "-o file");
+			fprintf(hf, "\t%-11s no floating-point registers in integer code\n", "-n");
+			fprintf(hf, "\t%-11s no unwind tables\n", "-U");
 			fprintf(hf, "\t%-11s generate for a target among:\n", "-t <target>");
 			fprintf(hf, "\t%-11s ", "");
 			for (t=tlist, sep=""; *t; t++, sep=", ") {

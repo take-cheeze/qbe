@@ -392,7 +392,7 @@ struct Lnk {
 	char export;
 	char thread;
 	char common;
-	char align;
+	int align;   /* nfcxx: an int, for the kernel's page-aligned data (align 4096) */
 	char *sec;
 	char *secf;
 };
@@ -472,6 +472,8 @@ struct Dat {
 /* main.c */
 extern Target T;
 extern char debug['Z'+1];
+extern int nofp;
+extern int nounwind;   /* -U (nfcxx): no unwind tables (CFI), the kernel's -fno-asynchronous-unwind-tables */   /* -n (nfcxx): no floating-point registers in integer code (the Linux kernel's -mno-sse) */
 
 /* util.c */
 typedef enum {
