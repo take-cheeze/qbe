@@ -457,6 +457,11 @@ parseref()
 			}
 			break;
 		}
+		/* local exec cannot go in a shared object: with -p,
+		 * a thread-local symbol of this file is reached by
+		 * initial exec, as an extern one */
+		if (pic && (c.sym.type & SThr))
+			c.sym.type |= SExt;
 		if (tok != Tglo)
 			return R;
 		/* fall through */

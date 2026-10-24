@@ -474,6 +474,7 @@ extern Target T;
 extern char debug['Z'+1];
 extern int nofp;       /* -n (nfcxx): no floating-point registers in integer code (the Linux kernel's -mno-sse) */
 extern int nounwind;   /* -U (nfcxx): no unwind tables (CFI), the kernel's -fno-asynchronous-unwind-tables */
+extern int pic;
 
 /* util.c */
 typedef enum {
