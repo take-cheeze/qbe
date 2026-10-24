@@ -37,6 +37,7 @@ static Target *tlist[] = {
 };
 static FILE *outf;
 static int dbg;
+int pic;
 
 static void
 data(Dat *d)
@@ -137,7 +138,7 @@ main(int ac, char *av[])
 
 	T = Deftgt;
 	outf = stdout;
-	while ((c = getopt(ac, av, "hd:o:t:")) != -1)
+	while ((c = getopt(ac, av, "hd:o:pt:")) != -1)
 		switch (c) {
 		case 'd':
 			for (; *optarg; optarg++)
@@ -154,6 +155,9 @@ main(int ac, char *av[])
 					exit(1);
 				}
 			}
+			break;
+		case 'p':
+			pic = 1;
 			break;
 		case 't':
 			if (strcmp(optarg, "?") == 0) {
@@ -177,6 +181,8 @@ main(int ac, char *av[])
 			fprintf(hf, "%s [OPTIONS] {file.ssa, -}\n", av[0]);
 			fprintf(hf, "\t%-11s prints this help\n", "-h");
 			fprintf(hf, "\t%-11s output to file\n", "-o file");
+			fprintf(hf, "\t%-11s position independent (for a shared object):\n", "-p");
+			fprintf(hf, "\t%-11s thread-local symbols by initial exec\n", "");
 			fprintf(hf, "\t%-11s generate for a target among:\n", "-t <target>");
 			fprintf(hf, "\t%-11s ", "");
 			for (t=tlist, sep=""; *t; t++, sep=", ") {
