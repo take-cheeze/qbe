@@ -65,6 +65,7 @@ struct Target {
 	uint cansel:1;
 	uint blitcall:1; /* a large block copy is a call to memmove: the target's argregs and CALL encoding are the sysv ones */
 	uint ptr32:1;    /* pointers are 32-bit, of class w (i386); the IL's memory operands are then w */
+	uint regparm:2;  /* i386: the first integer arguments go in eax, edx, ecx (gcc's -mregparm) */
 };
 
 #define BIT(n) ((bits)1 << (n))

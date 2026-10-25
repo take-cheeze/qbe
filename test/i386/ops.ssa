@@ -1,0 +1,252 @@
+# integer operations; with seven values live at once, some are
+# in esi and edi, which have no 8-bit registers (byte stores,
+# 8-bit extensions and flags through xchg)
+
+export function w $arith(w %a, w %b) {
+@start
+	%s =w add %a, %b
+	%d =w sub %a, %b
+	%m =w mul %a, %b
+	%q =w div %a, %b
+	%r =w rem %a, %b
+	%uq =w udiv %a, %b
+	%ur =w urem %a, %b
+	%x =w xor %s, %d
+	%x =w add %x, %m
+	%x =w xor %x, %q
+	%x =w add %x, %r
+	%x =w xor %x, %uq
+	%x =w add %x, %ur
+	ret %x
+}
+
+export function w $shifts(w %a, w %n) {
+@start
+	%x =w shl %a, %n
+	%y =w sar %a, %n
+	%z =w shr %a, %n
+	%k =w shl %a, 3
+	%r =w xor %x, %y
+	%r =w xor %r, %z
+	%r =w add %r, %k
+	ret %r
+}
+
+export function w $cmps(w %a, w %b) {
+@start
+	%c0 =w ceqw %a, %b
+	%c1 =w cnew %a, %b
+	%c2 =w csltw %a, %b
+	%c3 =w cslew %a, %b
+	%c4 =w csgtw %a, %b
+	%c5 =w csgew %a, %b
+	%c6 =w cultw %a, %b
+	%c7 =w culew %a, %b
+	%c8 =w cugtw %a, %b
+	%c9 =w cugew %a, %b
+	%r =w shl %c1, 1
+	%r =w or %r, %c0
+	%t =w shl %c2, 2
+	%r =w or %r, %t
+	%t =w shl %c3, 3
+	%r =w or %r, %t
+	%t =w shl %c4, 4
+	%r =w or %r, %t
+	%t =w shl %c5, 5
+	%r =w or %r, %t
+	%t =w shl %c6, 6
+	%r =w or %r, %t
+	%t =w shl %c7, 7
+	%r =w or %r, %t
+	%t =w shl %c8, 8
+	%r =w or %r, %t
+	%t =w shl %c9, 9
+	%r =w or %r, %t
+	ret %r
+}
+
+# stores the 7 bytes of the arguments and their extensions,
+# all values live together
+export function w $bytes(w %p, w %a, w %b, w %c, w %d, w %e, w %f, w %g) {
+@start
+	%a1 =w add %a, 1
+	%b1 =w add %b, 1
+	%c1 =w add %c, 1
+	%d1 =w add %d, 1
+	%e1 =w add %e, 1
+	%f1 =w add %f, 1
+	%g1 =w add %g, 1
+	storeb %a1, %p
+	%p1 =w add %p, 1
+	storeb %b1, %p1
+	%p2 =w add %p, 2
+	storeb %c1, %p2
+	%p3 =w add %p, 3
+	storeb %d1, %p3
+	%p4 =w add %p, 4
+	storeb %e1, %p4
+	%p5 =w add %p, 5
+	storeb %f1, %p5
+	%p6 =w add %p, 6
+	storeb %g1, %p6
+	%xa =w extsb %a1
+	%xb =w extub %b1
+	%xc =w extsb %c1
+	%xd =w extub %d1
+	%xe =w extsb %e1
+	%xf =w extub %f1
+	%xg =w extsb %g1
+	%r =w add %xa, %xb
+	%r =w add %r, %xc
+	%r =w add %r, %xd
+	%r =w add %r, %xe
+	%r =w add %r, %xf
+	%r =w add %r, %xg
+	%r =w mul %r, 1000
+	%k0 =w csltw %a1, %b1
+	%k1 =w csltw %c1, %d1
+	%k2 =w csltw %e1, %f1
+	%k3 =w csltw %g1, %a1
+	%k4 =w csltw %b1, %c1
+	%k5 =w csltw %d1, %e1
+	%k6 =w csltw %f1, %g1
+	%k =w add %k0, %k1
+	%k =w add %k, %k2
+	%k =w add %k, %k3
+	%k =w add %k, %k4
+	%k =w add %k, %k5
+	%k =w add %k, %k6
+	%h1 =w extsh %a1
+	%h2 =w extuh %g1
+	%k =w add %k, %h1
+	%k =w add %k, %h2
+	%r =w add %r, %k
+	ret %r
+}
+
+# many values live across a call: spills and callee-saves
+export function w $pressure(w %a) {
+@start
+	%v0 =w add %a, 1
+	%v1 =w add %a, 2
+	%v2 =w add %a, 3
+	%v3 =w add %a, 4
+	%v4 =w add %a, 5
+	%v5 =w add %a, 6
+	%v6 =w add %a, 7
+	%v7 =w add %a, 8
+	%v8 =w add %a, 9
+	%c =w call $ident(w %v4)
+	%r =w mul %v0, %v1
+	%r =w add %r, %v2
+	%r =w mul %r, %v3
+	%r =w add %r, %v4
+	%r =w mul %r, %v5
+	%r =w add %r, %v6
+	%r =w xor %r, %v7
+	%r =w add %r, %v8
+	%r =w add %r, %c
+	ret %r
+}
+
+export function w $ident(w %x) {
+@start
+	ret %x
+}
+
+# loops and phis with constants, memory addressing with an index
+export function w $loop(w %p, w %n) {
+@start
+	%i =w copy 0
+	%s =w copy 0
+@loop
+	%c =w csltw %i, %n
+	jnz %c, @body, @end
+@body
+	%o =w mul %i, 4
+	%q =w add %p, %o
+	%v =w loadw %q
+	%s =w add %s, %v
+	%h =w loadsh %q
+	%s =w add %s, %h
+	%b =w loadub %q
+	%s =w add %s, %b
+	%i =w add %i, 1
+	jmp @loop
+@end
+	ret %s
+}
+
+export data $tab = { w 10, w 20, w 30, w 40 }
+
+export function w $global(w %i) {
+@start
+	%o =w mul %i, 4
+	%q =w add $tab, %o
+	%v =w loadw %q
+	%q2 =w add %q, 4
+	storew %v, %q2
+	%a =w add $tab, 8
+	%w =w loadw %a
+	%r =w add %v, %w
+	ret %r
+}
+
+export function w $indirect(w %f, w %x) {
+@start
+	%r =w call %f(w %x)
+	ret %r
+}
+
+# >>> driver
+# #include "rt.h"
+# int arith(int, int); int shifts(int, int); int cmps(int, int);
+# int bytes(char *, int, int, int, int, int, int, int);
+# int pressure(int); int loop(int *, int); int global(int);
+# int indirect(int (*)(int), int); int ident(int); extern int tab[4];
+# static int c_arith(int a, int b) {
+# 	int x = (a + b) ^ (a - b); x += a * b; x ^= a / b; x += a % b;
+# 	x ^= (unsigned)a / b; x += (unsigned)a % b; return x;
+# }
+# static int c_shifts(int a, int n) { return (((unsigned)a << n) ^ (a >> n) ^ ((unsigned)a >> n)) + a * 8; }
+# static int c_cmps(int a, int b) {
+# 	return (a == b) | (a != b) << 1 | (a < b) << 2 | (a <= b) << 3 | (a > b) << 4 | (a >= b) << 5
+# 	| ((unsigned)a < b) << 6 | ((unsigned)a <= b) << 7 | ((unsigned)a > b) << 8 | ((unsigned)a >= b) << 9;
+# }
+# static int c_bytes(char *p, int a, int b, int c, int d, int e, int f, int g) {
+# 	int v[7] = {a+1, b+1, c+1, d+1, e+1, f+1, g+1}, i, r, k;
+# 	for (i = 0; i < 7; i++) p[i] = v[i];
+# 	r = (signed char)v[0] + (unsigned char)v[1] + (signed char)v[2] + (unsigned char)v[3]
+# 	  + (signed char)v[4] + (unsigned char)v[5] + (signed char)v[6];
+# 	k = (v[0] < v[1]) + (v[2] < v[3]) + (v[4] < v[5]) + (v[6] < v[0]) + (v[1] < v[2]) + (v[3] < v[4]) + (v[5] < v[6]);
+# 	k += (short)v[0] + (unsigned short)v[6];
+# 	return r * 1000 + k;
+# }
+# static int c_pressure(int a) {
+# 	int r = (a+1)*(a+2); r += a+3; r *= a+4; r += a+5; r *= a+6; r += a+7; r ^= a+8; r += a+9; return r + a + 5;
+# }
+# int main(void) {
+# 	static int ab[][2] = {{7, 3}, {-7, 3}, {100, -9}, {-1, 1}, {0x7fffffff, 2}, {-100, -7}};
+# 	static int args[][7] = {{1, 2, 3, 4, 5, 6, 7}, {127, 255, -1, -129, 0x17f, 0xfffe, 0x8000}, {-2, 300, 200, 100, -300, 65535, -65536}};
+# 	char buf[8], cb[8]; int i, j, arr[5] = {1, 0x10002, -3, 0x7fff8000, 5};
+# 	for (i = 0; i < 6; i++) {
+# 		EQ("arith", arith(ab[i][0], ab[i][1]), c_arith(ab[i][0], ab[i][1]));
+# 		EQ("cmps", cmps(ab[i][0], ab[i][1]), c_cmps(ab[i][0], ab[i][1]));
+# 		EQ("cmps=", cmps(ab[i][0], ab[i][0]), c_cmps(ab[i][0], ab[i][0]));
+# 		for (j = 0; j < 32; j += 5)
+# 			EQ("shifts", shifts(ab[i][0], j), c_shifts(ab[i][0], j));
+# 	}
+# 	for (i = 0; i < 3; i++) {
+# 		int *v = args[i];
+# 		EQ("bytes", bytes(buf, v[0], v[1], v[2], v[3], v[4], v[5], v[6]), c_bytes(cb, v[0], v[1], v[2], v[3], v[4], v[5], v[6]));
+# 		for (j = 0; j < 7; j++) EQ("bytes[]", buf[j], cb[j]);
+# 	}
+# 	EQ("pressure", pressure(3), c_pressure(3));
+# 	EQ("pressure", pressure(-50), c_pressure(-50));
+# 	{ int s = 0; for (i = 0; i < 5; i++) s += arr[i] + (short)arr[i] + (unsigned char)arr[i];
+# 	  EQ("loop", loop(arr, 5), s); }
+# 	EQ("global", global(1), 40); EQ("tab", tab[2], 20);
+# 	EQ("indirect", indirect(ident, 42), 42);
+# 	return 0;
+# }
+# <<<

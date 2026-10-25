@@ -1,0 +1,6 @@
+# error: thread-local symbols
+export function w $f() {
+@start
+	%c =w loadw thread $x
+	ret %c
+}

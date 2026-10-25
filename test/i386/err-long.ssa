@@ -1,0 +1,7 @@
+# error: 64-bit integers (class l)
+export function w $f(w %a) {
+@start
+	%b =l extsw %a
+	%c =w copy %b
+	ret %c
+}

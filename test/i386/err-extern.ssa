@@ -1,0 +1,6 @@
+# error: extern (GOT) symbols
+export function w $f() {
+@start
+	%c =w loadw extern $x
+	ret %c
+}

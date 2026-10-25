@@ -1,0 +1,5 @@
+# error: environment arguments are not supported
+export function w $f(env %e) {
+@start
+	ret 0
+}

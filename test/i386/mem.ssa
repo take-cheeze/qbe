@@ -1,0 +1,122 @@
+# variadic functions, dynamic and over-aligned allocations,
+# aggregate copies
+
+export function w $vsum(w %n, ...) {
+@start
+	%ap =w alloc4 4
+	vastart %ap
+	%s =w copy 0
+@loop
+	%c =w csgtw %n, 0
+	jnz %c, @body, @end
+@body
+	%v =w vaarg %ap
+	%s =w add %s, %v
+	%n =w sub %n, 1
+	jmp @loop
+@end
+	ret %s
+}
+
+export function w $callv() {
+@start
+	%a =w call $vsum(w 3, ..., w 1, w 2, w 3)
+	%b =w call $c_vsum(w 4, ..., w 10, w 20, w 30, w 40)
+	%r =w add %a, %b
+	ret %r
+}
+
+# a dynamic allocation, used across a call
+export function w $dyn(w %n) {
+@start
+	%p =w alloc4 %n
+	%q =w alloc16 64
+	%al =w and %q, 15
+	call $fillw(w %p, w %n)
+	%x =w loadw %p
+	%e =w add %p, %n
+	%e =w sub %e, 4
+	%y =w loadw %e
+	%r =w add %x, %y
+	%r =w mul %r, 100
+	%r =w add %r, %al
+	ret %r
+}
+
+function $fillw(w %p, w %n) {
+@start
+	%i =w copy 0
+@loop
+	%c =w csltw %i, %n
+	jnz %c, @body, @end
+@body
+	%q =w add %p, %i
+	storew %i, %q
+	%i =w add %i, 4
+	jmp @loop
+@end
+	ret
+}
+
+# the alignment of 16-aligned locals in a non-leaf function
+export function w $align16() {
+@start
+	%a =w alloc4 4
+	%b =w alloc16 32
+	%c =w alloc8 8
+	%d =w alloc16 16
+	call $fillw(w %a, w 4)
+	call $fillw(w %b, w 32)
+	call $fillw(w %c, w 8)
+	call $fillw(w %d, w 16)
+	%x =w and %b, 15
+	%y =w and %d, 15
+	%z =w and %c, 7
+	%r =w or %x, %y
+	%r =w or %r, %z
+	ret %r
+}
+
+type :big = { w 100 }
+
+export function :big $retbig(:big %a, w %k) {
+@start
+	%p =w alloc4 400
+	blit %a, %p, 400
+	%q =w add %p, 396
+	storew %k, %q
+	ret %p
+}
+
+export function w $callbig(w %p) {
+@start
+	%r =:big call $retbig(:big %p, w 77)
+	%q =w add %r, 4
+	%v =w loadw %q
+	%q =w add %r, 396
+	%k =w loadw %q
+	%v =w add %v, %k
+	ret %v
+}
+
+# >>> driver
+# #include "rt.h"
+# struct big { int w[100]; };
+# int vsum(int, ...); int callv(void); int dyn(int); int align16(void);
+# struct big retbig(struct big, int); int callbig(struct big *);
+# int c_vsum(int n, ...) { __builtin_va_list ap; int s = 0; __builtin_va_start(ap, n); while (n--) s += __builtin_va_arg(ap, int); __builtin_va_end(ap); return s; }
+# int main(void) {
+# 	struct big b, r; int i;
+# 	for (i = 0; i < 100; i++) b.w[i] = i;
+# 	EQ("vsum", vsum(5, 1, 2, 3, 4, 5), 15);
+# 	EQ("vsum0", vsum(0), 0);
+# 	EQ("callv", callv(), 106);
+# 	EQ("dyn", dyn(40), 3600);
+# 	EQ("dyn", dyn(4), 0);
+# 	EQ("align16", align16(), 0);
+# 	r = retbig(b, 5);
+# 	EQ("retbig", r.w[1] + r.w[98] + r.w[99], 1 + 98 + 5);
+# 	EQ("callbig", callbig(&b), 1 + 77);
+# 	return 0;
+# }
+# <<<

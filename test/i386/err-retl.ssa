@@ -1,0 +1,5 @@
+# error: 64-bit integers (class l)
+export function l $f() {
+@start
+	ret 1
+}

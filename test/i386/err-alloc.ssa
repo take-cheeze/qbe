@@ -1,0 +1,6 @@
+# error: alloc result must be of class w
+export function w $f() {
+@start
+	%p =l alloc4 4
+	ret 0
+}
