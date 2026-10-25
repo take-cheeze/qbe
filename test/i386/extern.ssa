@@ -1,0 +1,19 @@
+# extern symbols (QBE's GOT access on amd64) are direct
+# references: the i386 code is not position-independent
+
+export function w $getx() {
+@start
+	%v =w loadw extern $x
+	%p =w add extern $x, 4
+	%w =w loadw %p
+	%r =w call extern $twice(w %v)
+	%r =w add %r, %w
+	ret %r
+}
+
+# >>> driver
+# int x[2] = {20, 2};
+# int twice(int a) { return 2 * a; }
+# int getx(void);
+# int main(void) { return getx() != 42; }
+# <<<
