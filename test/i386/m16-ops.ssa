@@ -1,0 +1,132 @@
+# real mode (-m16, .code16gcc): test() runs in a boot sector under
+# qemu-system-i386 and natively in 32-bit mode; the results must be
+# the same
+
+type :s12 = { w 3 }
+
+function w $sum(w %a, w %b, w %c, w %d, w %e) {
+@start
+	%r =w add %a, %b
+	%r =w mul %r, %c
+	%r =w sub %r, %d
+	%r =w xor %r, %e
+	ret %r
+}
+
+function :s12 $mk(w %v) {
+@start
+	%p =w alloc4 12
+	storew %v, %p
+	%q =w add %p, 4
+	%v2 =w mul %v, 3
+	storew %v2, %q
+	%q =w add %p, 8
+	storew 9, %q
+	ret %p
+}
+
+function w $take(w %x, :s12 %s, w %y) {
+@start
+	%a =w loadw %s
+	%q =w add %s, 8
+	%b =w loadw %q
+	%r =w add %a, %b
+	%r =w mul %r, %x
+	%r =w sub %r, %y
+	ret %r
+}
+
+function w $va(w %n, ...) {
+@start
+	%ap =w alloc4 4
+	vastart %ap
+	%s =w copy 0
+@loop
+	%c =w csgtw %n, 0
+	jnz %c, @body, @end
+@body
+	%v =w vaarg %ap
+	%s =w mul %s, 10
+	%s =w add %s, %v
+	%n =w sub %n, 1
+	jmp @loop
+@end
+	ret %s
+}
+
+function l $lmix(l %a, l %b) {
+@start
+	%m =l mul %a, %b
+	%s =l shl %m, 7
+	%t =l sar %a, 40
+	%r =l add %s, %t
+	%c =w csltl %a, %b
+	%cl =l extuw %c
+	%r =l xor %r, %cl
+	ret %r
+}
+
+function w $bytes(w %p, w %a, w %b, w %c, w %d, w %e, w %f) {
+@start
+	%a1 =w add %a, 1
+	%b1 =w add %b, 2
+	%c1 =w add %c, 3
+	%d1 =w add %d, 4
+	%e1 =w add %e, 5
+	%f1 =w add %f, 6
+	storeb %a1, %p
+	%p1 =w add %p, 1
+	storeb %b1, %p1
+	%p2 =w add %p, 2
+	storeb %c1, %p2
+	%p3 =w add %p, 3
+	storeb %d1, %p3
+	%p4 =w add %p, 4
+	storeb %e1, %p4
+	%p5 =w add %p, 5
+	storeb %f1, %p5
+	%k =w csltw %a1, %f1
+	%x =w extsb %e1
+	%y =w extub %f1
+	%r =w add %x, %y
+	%r =w add %r, %k
+	ret %r
+}
+
+function w $dyn(w %n) {
+@start
+	%p =w alloc4 %n
+	storew 7, %p
+	%q =w add %p, %n
+	%q =w sub %q, 4
+	storew 5, %q
+	%a =w loadw %p
+	%b =w loadw %q
+	%r =w mul %a, %b
+	%r =w udiv %r, 3
+	ret %r
+}
+
+export function w $test() {
+@start
+	%r =w call $sum(w 1, w 2, w 3, w 4, w 5)
+	%s =:s12 call $mk(w 11)
+	%t =w call $take(w 2, :s12 %s, w 1)
+	%r =w add %r, %t
+	%u =w call $va(w 3, ..., w 4, w 5, w 6)
+	%r =w add %r, %u
+	%l =l call $lmix(l 81985529216486895, l -12345)
+	%lw =w copy %l
+	%lh =l shr %l, 32
+	%lhw =w copy %lh
+	%r =w xor %r, %lw
+	%r =w add %r, %lhw
+	%buf =w alloc4 8
+	%b =w call $bytes(w %buf, w 10, w 20, w 30, w 40, w 120, w 250)
+	%r =w add %r, %b
+	%b5 =w loadub %buf
+	%r =w add %r, %b5
+	%d =w call $dyn(w 40)
+	%r =w add %r, %d
+	ret %r
+}

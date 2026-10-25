@@ -78,6 +78,45 @@ refuse() {
 	echo "[ok]"
 }
 
+# m16-*.ssa: test() in real mode, compiled with -m16 and run by a
+# boot sector (m16start.S) under qemu-system-i386, must return what
+# it returns natively in 32-bit mode
+m16() {
+	t=$1 tgt=$2
+	printf "%-14s %-35s" "$tgt -m16" "$(basename $t)..."
+	if ! $bin -t $tgt -o $tmp.s $t || ! $bin -m16 -t $tgt -o $tmp.16.s $t; then
+		echo "[qbe fail]"
+		return 1
+	fi
+	echo '#include "rt.h"
+		int test(void);
+		int main(void) { rt_putd(test()); return 0; }' > $tmp.c
+	if ! $cc $rp -o $tmp.exe $tmp.c $tdir/rt.c $tmp.s \
+	|| ! ${CC32:-gcc} -m16 -c -o $tmp.16.o $tmp.16.s \
+	|| ! ${CC32:-gcc} -m16 -c -o $tmp.st.o $tdir/m16start.S \
+	|| ! ld -m elf_i386 -T $tdir/m16.ld --oformat binary -o $tmp.img $tmp.st.o $tmp.16.o; then
+		echo "[cc fail]"
+		return 1
+	fi
+	if test `wc -c < $tmp.img` -gt 8704; then
+		echo "[too large]"
+		return 1
+	fi
+	truncate -s 1474560 $tmp.img
+	rm -f $tmp.ser
+	timeout 60 $qemu -display none -serial file:$tmp.ser \
+		-device isa-debug-exit,iobase=0xf4,iosize=1 \
+		-drive format=raw,file=$tmp.img,if=floppy -boot a
+	got=`od -A n -t d4 $tmp.ser 2>/dev/null | tr -d ' '`
+	want=`$tmp.exe`
+	if test "$got" != "$want"; then
+		echo "[real mode: $got, 32-bit: $want]"
+		return 1
+	fi
+	echo "[ok]"
+}
+
+qemu=${QEMU:-qemu-system-i386}
 fail=0
 count=0
 test $# -eq 0 && set -- $tdir/*.ssa
@@ -87,6 +126,22 @@ for t in "$@"; do
 		refuse $t i386
 		fail=`expr $fail + $?`
 		count=`expr $count + 1`
+		continue
+		;;
+	m16-*)
+		if ! $qemu -version >/dev/null 2>&1; then
+			echo "no $qemu: `basename $t` skipped"
+			continue
+		fi
+		for tgt in i386 i386_regparm3; do
+			case $tgt in
+			i386_regparm3) rp=-mregparm=3 ;;
+			*) rp= ;;
+			esac
+			m16 $t $tgt
+			fail=`expr $fail + $?`
+			count=`expr $count + 1`
+		done
 		continue
 		;;
 	esac
@@ -99,7 +154,7 @@ for t in "$@"; do
 		count=`expr $count + 1`
 	done
 done
-rm -f $tmp.s $tmp.c $tmp.out $tmp.exe $tmp.err
+rm -f $tmp.s $tmp.c $tmp.out $tmp.exe $tmp.err $tmp.16.s $tmp.16.o $tmp.st.o $tmp.img $tmp.ser
 if test $fail -ge 1; then
 	echo
 	echo "$fail of $count tests failed!"
