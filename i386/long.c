@@ -319,6 +319,7 @@ lins(Ins *i)
 {
 	Ref a0, a1, b0, b1, t0, t1, t2, t3;
 	int k, c, n;
+	uint n0;
 
 	if (iscmp(i->op, &k, &c) && k == Kl) {
 		cmp(i, c);
@@ -334,13 +335,29 @@ lins(Ins *i)
 	if (i->cls != Kl || i->op == Ocall || i->op == Onop
 	|| isstore(i->op) || i->op == Odbgloc) {
 		/* a word instruction: a long operand is its low word */
+		k = 0;
 		for (n=0; n<2; n++)
 			if (islong(i->arg[n])) {
 				if (argcls(i, n) == Kl)
 					die("unhandled long operand in %s",
 						optab[i->op].name);
 				i->arg[n] = lo[i->arg[n].val];
+				k = 1;
 			}
+		/* the low word may be a constant: fold, as the
+		 * instructions do not all take constants */
+		if (k && i->cls == Kw && rtype(i->to) == RTmp
+		&& optab[i->op].canfold) {
+			n0 = nib;
+			t0 = op2(i->op, i->arg[0], i->arg[1]);
+			/* op2 emitted the instruction, or gave a
+			 * constant or an operand */
+			if (nib == n0+1 && req(ib[n0].to, t0))
+				ib[n0].to = i->to;
+			else
+				add(Ocopy, i->to, t0, R);
+			return;
+		}
 		vgrow(&ib, ++nib);
 		ib[nib-1] = *i;
 		ib[nib-1].cls = i->cls == Kl ? Kw : i->cls;
@@ -446,7 +463,7 @@ i386_long(Fn *f)
 	Phi *p, *p1;
 	Ins *i;
 	uint n, nt, t, r;
-	int any;
+	int any, k, c;
 
 	fn = f;
 	any = 0;
@@ -454,6 +471,14 @@ i386_long(Fn *f)
 	for (t=Tmp0; t<nt; t++)
 		if (fn->tmp[t].cls == Kl)
 			any = 1;
+	/* long constants need it too (storel 1, %p) */
+	for (b=fn->start; b && !any; b=b->link)
+		for (i=b->ins; i<&b->ins[b->nins]; i++)
+			if (i->cls == Kl || i->op == Ostorel
+			|| (iscmp(i->op, &k, &c) && k == Kl)) {
+				any = 1;
+				break;
+			}
 	if (!any)
 		return;
 	lo = emalloc(nt * sizeof lo[0]);

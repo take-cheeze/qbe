@@ -124,6 +124,37 @@ export function w $bytes(w %p, w %a, w %b, w %c, w %d, w %e, w %f, w %g) {
 	ret %r
 }
 
+# the 8-bit extensions of esi and edi between a test and its
+# jump must leave the flags alone
+export function w $extflags(w %a, w %b, w %c, w %d, w %e, w %f, w %g) {
+@start
+	%a1 =w add %a, 1
+	%b1 =w add %b, 1
+	%c1 =w add %c, 1
+	%d1 =w add %d, 1
+	%e1 =w add %e, 1
+	%f1 =w add %f, 1
+	%t =w and %g, 1
+	%xa =w extub %a1
+	%xb =w extsb %b1
+	%xc =w extub %c1
+	%xd =w extsb %d1
+	%xe =w extub %e1
+	%xf =w extsb %f1
+	jnz %t, @odd, @even
+@odd
+	%r =w add %xa, %xb
+	%r =w add %r, %xc
+	jmp @end
+@even
+	%r =w add %xd, %xe
+	%r =w add %r, %xf
+@end
+	%s =w add %xa, %xf
+	%r =w xor %r, %s
+	ret %r
+}
+
 # many values live across a call: spills and callee-saves
 export function w $pressure(w %a) {
 @start
@@ -204,6 +235,7 @@ export function w $indirect(w %f, w %x) {
 # int bytes(char *, int, int, int, int, int, int, int);
 # int pressure(int); int loop(int *, int); int global(int);
 # int indirect(int (*)(int), int); int ident(int); extern int tab[4];
+# int extflags(int, int, int, int, int, int, int);
 # static int c_arith(int a, int b) {
 # 	int x = (a + b) ^ (a - b); x += a * b; x ^= a / b; x += a % b;
 # 	x ^= (unsigned)a / b; x += (unsigned)a % b; return x;
@@ -247,6 +279,12 @@ export function w $indirect(w %f, w %x) {
 # 	  EQ("loop", loop(arr, 5), s); }
 # 	EQ("global", global(1), 40); EQ("tab", tab[2], 20);
 # 	EQ("indirect", indirect(ident, 42), 42);
+# 	for (i = 0; i < 4; i++) {
+# 		int a = 200 + i, b = 300 - i, c = 127 + i, d = -129 - i, e = 255 * i, f = 1000 + i, r, s;
+# 		unsigned char xa = a + 1, xc = c + 1, xe = e + 1; signed char xb = b + 1, xd = d + 1, xf = f + 1;
+# 		r = i & 1 ? xa + xb + xc : xd + xe + xf; s = xa + xf;
+# 		EQ("extflags", extflags(a, b, c, d, e, f, i), r ^ s);
+# 	}
 # 	return 0;
 # }
 # <<<
