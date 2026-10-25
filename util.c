@@ -313,7 +313,10 @@ igroup(Blk *b, Ins *i, Ins **i0, Ins **i1)
 int
 argcls(Ins *i, int n)
 {
-	return optab[i->op].argcls[n][i->cls];
+	int k;
+
+	k = optab[i->op].argcls[n][i->cls];
+	return k == Km ? Kptr : k;
 }
 
 void
@@ -551,15 +554,15 @@ stkalloc(Ins *ins, Ref r, int al, uint64_t sz, Fn *fn)
 
 	if (al <= 4) {
 		al = al >= 2 ? al - 2 : 0;
-		ins[0] = (Ins){Oalloc+al, Kl, r, {getcon(sz, fn)}};
+		ins[0] = (Ins){Oalloc+al, Kptr, r, {getcon(sz, fn)}};
 		return 1;
 	}
 	a = (int64_t)1 << al;
-	r0 = newtmp("isel", Kl, fn);
-	r1 = newtmp("isel", Kl, fn);
-	ins[0] = (Ins){Oalloc1, Kl, r0, {getcon(sz + a - 16, fn)}};
-	ins[1] = (Ins){Oadd, Kl, r1, {r0, getcon(a - 16, fn)}};
-	ins[2] = (Ins){Oand, Kl, r, {r1, getcon(-a, fn)}};
+	r0 = newtmp("isel", Kptr, fn);
+	r1 = newtmp("isel", Kptr, fn);
+	ins[0] = (Ins){Oalloc1, Kptr, r0, {getcon(sz + a - 16, fn)}};
+	ins[1] = (Ins){Oadd, Kptr, r1, {r0, getcon(a - 16, fn)}};
+	ins[2] = (Ins){Oand, Kptr, r, {r1, getcon(-a, fn)}};
 	return 3;
 }
 
@@ -580,20 +583,20 @@ salloc(Ref rt, Ref rs, Fn *fn)
 			err("invalid alloc size %"PRId64, sz);
 		sz = (sz + 15)  & -16;
 		if (sz < INT_MAX-15) {
-			emit(Osalloc, Kl, rt, getcon(sz, fn), R);
+			emit(Osalloc, Kptr, rt, getcon(sz, fn), R);
 		} else {
 			/* too large for the immediate of a subq: the size goes through a register */
-			r0 = newtmp("isel", Kl, fn);
-			emit(Osalloc, Kl, rt, r0, R);
-			emit(Ocopy, Kl, r0, getcon(sz, fn), R);
+			r0 = newtmp("isel", Kptr, fn);
+			emit(Osalloc, Kptr, rt, r0, R);
+			emit(Ocopy, Kptr, r0, getcon(sz, fn), R);
 		}
 	} else {
 		/* r0 = (r + 15) & -16 */
-		r0 = newtmp("isel", Kl, fn);
-		r1 = newtmp("isel", Kl, fn);
-		emit(Osalloc, Kl, rt, r0, R);
-		emit(Oand, Kl, r0, r1, getcon(-16, fn));
-		emit(Oadd, Kl, r1, rs, getcon(15, fn));
+		r0 = newtmp("isel", Kptr, fn);
+		r1 = newtmp("isel", Kptr, fn);
+		emit(Osalloc, Kptr, rt, r0, R);
+		emit(Oand, Kptr, r0, r1, getcon(-16, fn));
+		emit(Oadd, Kptr, r1, rs, getcon(15, fn));
 		if (fn->tmp[rs.val].slot != -1)
 			err("unlikely alloc argument %%%s for %%%s",
 				fn->tmp[rs.val].name, fn->tmp[rt.val].name);

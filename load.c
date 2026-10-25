@@ -148,7 +148,7 @@ load(Slice sl, bits msk, Loc *l)
 			if (!a->offset)
 				break;
 			r1 = getcon(a->offset, curf);
-			r = iins(Kl, Oadd, r, r1, l);
+			r = iins(Kptr, Oadd, r, r1, l);
 			break;
 		case ACon:
 		case ASym:

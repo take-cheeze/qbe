@@ -40,17 +40,18 @@ blit(Ref sd[2], int sz, Fn *fn)
 		return;
 	}
 	off = fwd ? sz : 0;
-	for (p=tbl; sz; p++)
+	/* a 32-bit target copies by words: it has no l class */
+	for (p=T.ptr32 ? tbl+1 : tbl; sz; p++)
 		for (n=p->size; sz>=n; sz-=n) {
 			off -= fwd ? n : 0;
-			r = newtmp("blt", Kl, fn);
-			r1 = newtmp("blt", Kl, fn);
+			r = newtmp("blt", p->cls, fn);
+			r1 = newtmp("blt", Kptr, fn);
 			ro = getcon(off, fn);
 			emit(p->st, 0, R, r, r1);
-			emit(Oadd, Kl, r1, sd[1], ro);
-			r1 = newtmp("blt", Kl, fn);
+			emit(Oadd, Kptr, r1, sd[1], ro);
+			r1 = newtmp("blt", Kptr, fn);
 			emit(p->ld, p->cls, r, r1, R);
-			emit(Oadd, Kl, r1, sd[0], ro);
+			emit(Oadd, Kptr, r1, sd[0], ro);
 			off += fwd ? 0 : n;
 		}
 }
