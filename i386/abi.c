@@ -421,7 +421,7 @@ selvaarg(Fn *fn, Ins *i)
 /* what the i386 target cannot compile yet is an error, never
  * code that does something else: values of class l (64-bit
  * integers), s and d (no x87 floating point), thread-local
- * and GOT (extern, PIC) symbols, landing pads
+ * symbols, landing pads
  */
 static void
 refuse(Fn *fn)
@@ -470,8 +470,9 @@ refuse(Fn *fn)
 		if (c->type == CAddr) {
 			if (c->sym.type & SThr)
 				err(msg, "thread-local symbols", fn->name);
-			if (c->sym.type & SExt)
-				err(msg, "extern (GOT) symbols", fn->name);
+			/* non-PIC: an extern symbol is a direct
+			 * reference, which the linker resolves */
+			c->sym.type &= ~SExt;
 		}
 	if (fn->eh_lp)
 		err(msg, "landing pads", fn->name);
