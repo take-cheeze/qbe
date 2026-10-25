@@ -385,6 +385,34 @@ emitstoreb(Ins *i, E *e)
 	fprintf(e->f, "\txchgl %%%s, %%%s\n", rname[b][0], rname[r][0]);
 }
 
+/* an 8-bit extension of esi or edi: through a byte register b
+ * exchanged with it, which leaves the flags alone (isel puts the
+ * extensions between a comparison and its jump) */
+static void
+emitext8(Ins *i, E *e)
+{
+	static int br[] = {EAX, ECX, EDX, EBX};
+	int b, j, r, d;
+	char *op;
+
+	r = i->arg[0].val;
+	assert(isreg(i->to));
+	d = i->to.val;
+	for (j=0;; j++) {
+		assert(j < 4);
+		b = br[j];
+		if (b != d)
+			break;
+	}
+	op = i->op == Oextub ? "movzbl" : "movsbl";
+	fprintf(e->f, "\txchgl %%%s, %%%s\n", rname[b][0], rname[r][0]);
+	/* the value is in b, and r holds b's: the result goes
+	 * to b itself when it is for r, exchanged back */
+	fprintf(e->f, "\t%s %%%s, %%%s\n", op, rname[b][SByte],
+		rname[d == r ? b : d][0]);
+	fprintf(e->f, "\txchgl %%%s, %%%s\n", rname[b][0], rname[r][0]);
+}
+
 static void
 emitins(Ins i, E *e)
 {
@@ -441,12 +469,7 @@ emitins(Ins i, E *e)
 	case Oextsb:
 	case Oextub:
 		if (rtype(i.arg[0]) == RTmp && !hasbyte(i.arg[0].val)) {
-			if (!req(i.to, i.arg[0]))
-				emitf("movl %0, %=", &i, e);
-			if (i.op == Oextub)
-				emitf("andl $255, %=", &i, e);
-			else
-				emitf("shll $24, %=\n\tsarl $24, %=", &i, e);
+			emitext8(&i, e);
 			break;
 		}
 		goto Table;
