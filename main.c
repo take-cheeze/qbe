@@ -7,6 +7,7 @@ Target T;
 
 int nofp;
 int nounwind;
+static int code16;   /* -m16: i386 code run in real mode, as gcc -m16 makes it (.code16gcc) */
 char debug['Z'+1] = {
 	['P'] = 0, /* parsing */
 	['M'] = 0, /* memory optimization */
@@ -143,7 +144,7 @@ main(int ac, char *av[])
 
 	T = Deftgt;
 	outf = stdout;
-	while ((c = getopt(ac, av, "hd:no:t:U")) != -1)
+	while ((c = getopt(ac, av, "hd:m:no:t:U")) != -1)
 		switch (c) {
 		case 'd':
 			for (; *optarg; optarg++)
@@ -154,6 +155,13 @@ main(int ac, char *av[])
 			break;
 		case 'n':
 			nofp = 1;
+			break;
+		case 'm':
+			if (strcmp(optarg, "16") != 0) {
+				fprintf(stderr, "unknown option -m%s\n", optarg);
+				exit(1);
+			}
+			code16 = 1;
 			break;
 		case 'U':
 			nounwind = 1;
@@ -191,6 +199,7 @@ main(int ac, char *av[])
 			fprintf(hf, "\t%-11s output to file\n", "-o file");
 			fprintf(hf, "\t%-11s no floating-point registers in integer code\n", "-n");
 			fprintf(hf, "\t%-11s no unwind tables\n", "-U");
+			fprintf(hf, "\t%-11s i386 code for real mode (.code16gcc, gcc's -m16)\n", "-m16");
 			fprintf(hf, "\t%-11s generate for a target among:\n", "-t <target>");
 			fprintf(hf, "\t%-11s ", "");
 			for (t=tlist, sep=""; *t; t++, sep=", ") {
@@ -202,6 +211,15 @@ main(int ac, char *av[])
 			fprintf(hf, "\t%-11s dump debug information\n", "-d <flags>");
 			exit(c != 'h');
 		}
+
+	if (code16) {
+		if (!T.ptr32) {
+			fprintf(stderr, "-m16 needs an i386 target\n");
+			exit(1);
+		}
+		/* gas adds the operand and address size prefixes */
+		fputs(".code16gcc\n", outf);
+	}
 
 	do {
 		f = av[optind];
