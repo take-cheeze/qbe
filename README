@@ -6,7 +6,8 @@ tools/  Miscellaneous tools (testing).
 test/   Tests.
 amd64/
 arm64/
-rv64/   Architecture-specific code.
+rv64/
+i386/   Architecture-specific code (i386: doc/i386.txt).
 
 The LICENSE file applies to all files distributed.
 

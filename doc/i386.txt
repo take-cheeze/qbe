@@ -1,0 +1,84 @@
+====
+i386
+====
+
+32-bit x86, System V ELF (Linux), non-PIC.
+
+- Targets and options
+---------------------
+
+  -t i386            the cdecl convention: every argument on
+                     the stack
+  -t i386_regparm3   gcc's -mregparm=3, as the Linux kernel
+                     builds its i386 and real-mode code
+  -m16               i386 code for real mode: the output starts
+                     with .code16gcc, as gcc -m16 makes it (gas
+                     adds the operand and address size prefixes)
+
+- The IL on i386
+----------------
+
+Pointers are 32-bit, of class w: the memory operands of loads,
+stores, blit, vastart, vaarg, call and the aggregate arguments
+are w, and alloc gives a w.  (Kptr in the code: Kw when the
+target sets ptr32, Kl otherwise.)
+
+Class l (64-bit integers) is supported as pairs of words
+(i386/long.c); its divisions are calls to libgcc's __divdi3,
+__moddi3, __udivdi3 and __umoddi3, as gcc makes them.  An l or
+d member of an aggregate type is aligned on 8 as on every QBE
+target; C's i386 layout (long long and double on 4) is spelled
+with words by the frontend.
+
+- ABI
+-----
+
+As gcc on Linux:
+
+  * the arguments are words on the stack, an aggregate copied
+    there rounded up to 4 bytes, a long two words (low first)
+  * a word is returned in eax, a long in edx:eax, an aggregate
+    always in memory: the caller passes its address as a
+    hidden first argument and the callee returns it in eax;
+    the cdecl callee pops the hidden argument (ret $4)
+  * sub-word arguments and returns are extended by the caller
+    (the callee does not rely on it)
+  * eax, ecx, edx are caller-save; ebx, esi, edi, ebp
+    callee-save
+  * regparm: the first three words of arguments go in eax, edx
+    and ecx: the hidden pointer first, then each argument of n
+    words (a small aggregate, a long) while n registers remain;
+    the first argument that does not fit goes on the stack with
+    all the following ones; a variadic function takes all its
+    arguments on the stack
+  * va_list is a pointer to the next argument
+  * the calls keep %esp aligned on 16 (the frame is always on
+    %ebp, the locals below -8(%ebp), so that a 16-aligned
+    local is aligned when the caller keeps the alignment; code
+    built with gcc's -mpreferred-stack-boundary=2, as the
+    kernel is, keeps 4 only)
+
+- Not supported (refused with an error)
+---------------------------------------
+
+Floating point (classes s and d; no x87 yet), thread-local
+symbols, environment arguments, landing pads.  An extern symbol
+is a direct reference (non-PIC).
+
+- Code generation notes
+-----------------------
+
+Six allocatable registers.  esi and edi have no 8-bit register:
+a byte store from them, their 8-bit extensions and a flag set
+in them go through one that has, exchanged with xchg, which
+leaves the flags alone.  A memory-to-memory move is a push and
+a pop.  No conditional moves (-march=i386), so no
+if-conversion.
+
+- Tests
+-------
+
+make check-i386 (tools/test-i386.sh): test/i386, for both
+conventions, with C drivers compiled by gcc -m32 (so the calls
+go both ways between gcc and QBE) and a freestanding runtime;
+the m16-*.ssa tests run in real mode under qemu-system-i386.
