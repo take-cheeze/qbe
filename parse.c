@@ -1131,7 +1131,9 @@ parsedat(void cb(Dat *), Lnk *lnk)
 	if (t == Talign) {
 		if (nextnl() != Tint)
 			err("alignment expected");
-		if (tokval.num <= 0 || tokval.num > 1 << 16
+		/* up to 2^29, the largest #[repr(align)] of Rust
+		 * (crossbeam's CachePadded is 128) */
+		if (tokval.num <= 0 || tokval.num > (1 << 29)
 		|| (tokval.num & (tokval.num-1)) != 0)
 			err("invalid alignment");
 		lnk->align = tokval.num;

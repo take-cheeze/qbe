@@ -392,7 +392,7 @@ struct Lnk {
 	char export;
 	char thread;
 	char common;
-	int align;   /* nfcxx: an int, for the kernel's page-aligned data (align 4096) */
+	int align;
 	char *sec;
 	char *secf;
 };
@@ -472,8 +472,8 @@ struct Dat {
 /* main.c */
 extern Target T;
 extern char debug['Z'+1];
-extern int nofp;
-extern int nounwind;   /* -U (nfcxx): no unwind tables (CFI), the kernel's -fno-asynchronous-unwind-tables */   /* -n (nfcxx): no floating-point registers in integer code (the Linux kernel's -mno-sse) */
+extern int nofp;       /* -n (nfcxx): no floating-point registers in integer code (the Linux kernel's -mno-sse) */
+extern int nounwind;   /* -U (nfcxx): no unwind tables (CFI), the kernel's -fno-asynchronous-unwind-tables */
 
 /* util.c */
 typedef enum {
@@ -518,6 +518,7 @@ Ref getcon(int64_t, Fn *);
 int addcon(Con *, Con *, int);
 int isconbits(Fn *fn, Ref r, int64_t *v);
 void salloc(Ref, Ref, Fn *);
+int stkalloc(Ins *, Ref, int, uint64_t, Fn *);
 void dumpts(BSet *, Tmp *, FILE *);
 void runmatch(uchar *, Num *, Ref, Ref *);
 void bsinit(BSet *, uint);
