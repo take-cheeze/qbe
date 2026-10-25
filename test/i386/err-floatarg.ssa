@@ -1,0 +1,6 @@
+# error: floating point
+export function w $f() {
+@start
+	%c =w call $g(d d_1.5)
+	ret %c
+}
