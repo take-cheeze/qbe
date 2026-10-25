@@ -11,7 +11,6 @@ enum {
 	K0,
 
 	Ke = -2, /* erroneous mode */
-	Km = Kl, /* memory pointer */
 };
 
 Op optab[NOp] = {
@@ -536,6 +535,8 @@ parserefl(int arg)
 			hasenv = 1;
 			env = 1;
 			next();
+			if (T.ptr32)
+				err("environment arguments are not supported on %s", T.name);
 			k = Kl;
 			break;
 		default:
@@ -555,9 +556,9 @@ parserefl(int arg)
 				*curi = (Ins){Opare, k, r, {R}};
 		else if (k == Kc)
 			if (arg)
-				*curi = (Ins){Oargc, Kl, R, {TYPE(ty), r}};
+				*curi = (Ins){Oargc, Kptr, R, {TYPE(ty), r}};
 			else
-				*curi = (Ins){Oparc, Kl, r, {TYPE(ty)}};
+				*curi = (Ins){Oparc, Kptr, r, {TYPE(ty)}};
 		else if (k >= Ksb)
 			if (arg)
 				*curi = (Ins){Oargsb+(k-Ksb), Kw, R, {r}};
@@ -716,7 +717,7 @@ parseline(PState ps)
 		op = Ocall;
 		expect(Tnl);
 		if (k == Kc) {
-			k = Kl;
+			k = Kptr;
 			arg[1] = TYPE(ty);
 		}
 		if (k >= Ksb)
@@ -729,6 +730,8 @@ parseline(PState ps)
 		op = Oload;
 	if (op == Talloc1 || op == Talloc2)
 		op = Oalloc;
+	if (isalloc(op) && k != Kptr)
+		err("alloc result must be of class %c (a pointer)", "wl"[Kptr]);
 	if (op == Ovastart && !curf->vararg)
 		err("cannot use vastart in non-variadic function");
 	if (k >= Ksb)
@@ -860,7 +863,7 @@ typecheck(Fn *fn)
 		}
 		for (i=b->ins; i<&b->ins[b->nins]; i++)
 			for (n=0; n<2; n++) {
-				k = optab[i->op].argcls[n][i->cls];
+				k = argcls(i, n);
 				r = i->arg[n];
 				t = &fn->tmp[r.val];
 				if (k == Ke)
@@ -884,7 +887,7 @@ typecheck(Fn *fn)
 		r = b->jmp.arg;
 		if (isret(b->jmp.type)) {
 			if (b->jmp.type == Jretc)
-				k = Kl;
+				k = Kptr;
 			else if (b->jmp.type >= Jretsb)
 				k = Kw;
 			else
@@ -922,7 +925,7 @@ parsefn(Lnk *lnk)
 		if (T.fpr0 <= i && i < T.fpr0 + T.nfpr)
 			newtmp(0, Kd, curf);
 		else
-			newtmp(0, Kl, curf);
+			newtmp(0, Kptr, curf);
 	curf->con[0].type = CBits;
 	curf->con[0].bits.i = 0xdeaddead;  /* UNDEF */
 	curf->con[1].type = CBits;
