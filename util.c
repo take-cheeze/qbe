@@ -538,6 +538,31 @@ isconbits(Fn *fn, Ref r, int64_t *v)
 	return 0;
 }
 
+/* Fills ins with the instructions, in block order, that set r
+ * to a stack slot of sz bytes aligned on 1<<al; returns their
+ * count. The alloc instructions align up to 16 (NAlign == 3),
+ * a larger alignment rounds up the address of a larger slot.
+ */
+int
+stkalloc(Ins *ins, Ref r, int al, uint64_t sz, Fn *fn)
+{
+	Ref r0, r1;
+	int64_t a;
+
+	if (al <= 4) {
+		al = al >= 2 ? al - 2 : 0;
+		ins[0] = (Ins){Oalloc+al, Kl, r, {getcon(sz, fn)}};
+		return 1;
+	}
+	a = (int64_t)1 << al;
+	r0 = newtmp("isel", Kl, fn);
+	r1 = newtmp("isel", Kl, fn);
+	ins[0] = (Ins){Oalloc1, Kl, r0, {getcon(sz + a - 16, fn)}};
+	ins[1] = (Ins){Oadd, Kl, r1, {r0, getcon(a - 16, fn)}};
+	ins[2] = (Ins){Oand, Kl, r, {r1, getcon(-a, fn)}};
+	return 3;
+}
+
 void
 salloc(Ref rt, Ref rs, Fn *fn)
 {
