@@ -82,6 +82,7 @@ static struct {
 	{ Osign,    "cltd" },
 	{ Oxdiv,    "divl %0" },
 	{ Oxidiv,   "idivl %0" },
+	{ Oxmul,    "mull %0" },
 	{ Oxcmp,    "cmpl %0, %1" },
 	{ Oxtest,   "testl %0, %1" },
 	{ NOp, 0 }
@@ -416,7 +417,8 @@ emitins(Ins i, E *e)
 		}
 	Table:
 		if (i.cls != Kw && i.op != Ostorew && i.op != Ostoreh
-		&& i.op != Ostoreb && i.op != Oxdiv && i.op != Oxidiv)
+		&& i.op != Ostoreb && i.op != Oxdiv && i.op != Oxidiv
+		&& i.op != Oxmul)
 			die("class %c on i386 (%s)", "wlsd"[i.cls],
 				optab[i.op].name);
 		for (o=0;; o++) {

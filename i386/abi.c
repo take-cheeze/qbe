@@ -131,7 +131,7 @@ argsclass(Ins *i0, Ins *i1, AClass *ac, int op, int retmem, int varc,
 		memset(a, 0, sizeof *a);
 		switch (i->op - op + Oarg) {
 		case Oarg:
-			a->size = 4;
+			a->size = i->cls == Kl ? 8 : 4;
 			break;
 		case Oargc:
 			a->type = &typ[i->arg[0].val];
@@ -190,6 +190,37 @@ offaddr(Ref base, uint off, Fn *fn)
 	return r;
 }
 
+/* emits r = the high word of the long v (before what is
+ * emitted next, emit() goes backwards) */
+static Ref
+hiword(Ref v, Fn *fn)
+{
+	Ref r;
+	int64_t c;
+
+	if (isconbits(fn, v, &c))
+		return getcon(c >> 32, fn);
+	r = newtmp("abi", Kl, fn);
+	emit(Oshr, Kl, r, v, getcon(32, fn));
+	return r;
+}
+
+/* emits the long to = vhi:vlo, from two words that the next
+ * instructions emitted (before these) define */
+static void
+mklong(Ref to, Ref vlo, Ref vhi, Fn *fn)
+{
+	Ref t0, t1, t2;
+
+	t0 = newtmp("abi", Kl, fn);
+	t1 = newtmp("abi", Kl, fn);
+	t2 = newtmp("abi", Kl, fn);
+	emit(Oor, Kl, to, t1, t0);
+	emit(Oshl, Kl, t1, t2, getcon(32, fn));
+	emit(Oextuw, Kl, t2, vhi, R);
+	emit(Oextuw, Kl, t0, vlo, R);
+}
+
 /* loads the word at off of the aggregate at p (of tsz bytes)
  * in the register or temporary r, without reading past the
  * aggregate's end
@@ -235,6 +266,7 @@ selret(Blk *b, Fn *fn)
 {
 	int j;
 	Ref r0;
+	Ins *ic;
 
 	j = b->jmp.type;
 	if (!isret(j) || j == Jret0)
@@ -246,6 +278,14 @@ selret(Blk *b, Fn *fn)
 		emit(Ocopy, Kw, TMP(EAX), fn->retr, R);
 		emit(Oblit1, 0, R, INT(typ[fn->retty].size), R);
 		emit(Oblit0, 0, R, r0, fn->retr);
+	} else if (j == Jretl) {
+		/* edx:eax */
+		emit(Ocopy, Kw, TMP(EDX), R, R);
+		ic = curi;
+		ic->arg[0] = hiword(r0, fn);
+		emit(Ocopy, Kw, TMP(EAX), r0, R);
+		b->jmp.arg = CALL(2);
+		return;
 	} else {
 		assert(j == Jretw);
 		emit(Ocopy, Kw, TMP(EAX), r0, R);
@@ -256,7 +296,7 @@ selret(Blk *b, Fn *fn)
 static void
 selcall(Fn *fn, Ins *i0, Ins *i1, RAlloc **rap)
 {
-	Ins *i, ains[3];
+	Ins *i, *ic, ains[3];
 	AClass *ac, *a;
 	int ca, ni, hreg, retmem, j, n;
 	uint stk, stk0, pop;
@@ -289,11 +329,20 @@ selcall(Fn *fn, Ins *i0, Ins *i1, RAlloc **rap)
 			ra->link = *rap;
 			*rap = ra;
 		}
-	} else
+		ca += 1;
+	} else if (i1->cls == Kl) {
+		r = newtmp("abi", Kw, fn);
+		r1 = newtmp("abi", Kw, fn);
+		mklong(i1->to, r, r1, fn);
+		emit(Ocopy, Kw, r1, TMP(EDX), R);
+		emit(Ocopy, Kw, r, TMP(EAX), R);
+		ca += 2;
+	} else {
 		emit(Ocopy, i1->cls, i1->to, TMP(EAX), R);
-	ca += 1;
+		ca += 1;
+	}
 
-	emit(Ocall, i1->cls, R, i1->arg[0], CALL(ca));
+	emit(Ocall, Kw, R, i1->arg[0], CALL(ca));
 
 	/* arguments in registers */
 	if (hreg)
@@ -305,7 +354,12 @@ selcall(Fn *fn, Ins *i0, Ins *i1, RAlloc **rap)
 			for (j=0; j<a->nreg; j++)
 				ldword(TMP(argreg[a->reg+j]), i->arg[1],
 					4*j, a->type->size, fn);
-		else
+		else if (i->cls == Kl) {
+			emit(Ocopy, Kw, TMP(argreg[a->reg+1]), R, R);
+			ic = curi;
+			ic->arg[0] = hiword(i->arg[0], fn);
+			emit(Ocopy, Kw, TMP(argreg[a->reg]), i->arg[0], R);
+		} else
 			emit(Ocopy, Kw, TMP(argreg[a->reg]), i->arg[0], R);
 	}
 
@@ -321,7 +375,7 @@ selcall(Fn *fn, Ins *i0, Ins *i1, RAlloc **rap)
 			emit(Oblit1, 0, R, INT(a->type->size), R);
 			emit(Oblit0, 0, R, i->arg[1], r1);
 		} else
-			emit(Ostorew, 0, R, i->arg[0], r1);
+			emit(i->cls == Kl ? Ostorel : Ostorew, 0, R, i->arg[0], r1);
 		emit(Oadd, Kw, r1, r, getcon(a->off, fn));
 	}
 	if (retmem && !hreg)
@@ -375,16 +429,26 @@ selpar(Fn *fn, Ins *i0, Ins *i1)
 		fn->retr = r;
 	}
 	for (i=i0, a=ac; i<i1; i++, a++) {
+		if (i->op == Opar && i->cls == Kl) {
+			a->ref[0] = newtmp("abi", Kw, fn);
+			a->ref[1] = newtmp("abi", Kw, fn);
+			mklong(i->to, a->ref[0], a->ref[1], fn);
+		}
+	}
+	for (i=i0, a=ac; i<i1; i++, a++) {
 		if (a->inmem) {
 			if (i->op == Oparc)
 				fn->tmp[i->to.val].slot = -(s + a->off/4);
-			else
+			else if (i->cls == Kl) {
+				emit(Oload, Kw, a->ref[0], SLOT(-(s + a->off/4)), R);
+				emit(Oload, Kw, a->ref[1], SLOT(-(s + a->off/4 + 1)), R);
+			} else
 				emit(Oload, Kw, i->to, SLOT(-(s + a->off/4)), R);
 			continue;
 		}
 		if (a->nreg == 0)
 			continue;
-		if (i->op == Oparc)
+		if (i->op == Oparc || i->cls == Kl)
 			for (j=0; j<a->nreg; j++)
 				emit(Ocopy, Kw, a->ref[j], TMP(argreg[a->reg+j]), R);
 		else
@@ -409,19 +473,18 @@ selvaarg(Fn *fn, Ins *i)
 {
 	Ref r0, r1;
 
-	assert(i->cls == Kw);
+	assert(i->cls == Kw || i->cls == Kl);
 	r0 = newtmp("abi", Kw, fn);
 	r1 = newtmp("abi", Kw, fn);
 	emit(Ostorew, Kw, R, r1, i->arg[0]);
-	emit(Oadd, Kw, r1, r0, getcon(4, fn));
-	emit(Oload, Kw, i->to, r0, R);
+	emit(Oadd, Kw, r1, r0, getcon(i->cls == Kl ? 8 : 4, fn));
+	emit(Oload, i->cls, i->to, r0, R);
 	emit(Oload, Kw, r0, i->arg[0], R);
 }
 
 /* what the i386 target cannot compile yet is an error, never
- * code that does something else: values of class l (64-bit
- * integers), s and d (no x87 floating point), thread-local
- * symbols, landing pads
+ * code that does something else: values of class s and d (no
+ * x87 floating point), thread-local symbols, landing pads
  */
 static void
 refuse(Fn *fn)
@@ -435,13 +498,8 @@ refuse(Fn *fn)
 	int n, k;
 
 	for (t=&fn->tmp[Tmp0]; t<&fn->tmp[fn->ntmp]; t++)
-		switch (t->cls) {
-		case Kl:
-			err(msg, "64-bit integers (class l)", fn->name);
-		case Ks:
-		case Kd:
+		if (KBASE(t->cls) == 1)
 			err(msg, "floating point", fn->name);
-		}
 	for (b=fn->start; b; b=b->link) {
 		for (i=b->ins; i<&b->ins[b->nins]; i++) {
 			if (i->op == Oargc || i->op == Oparc)
@@ -451,16 +509,11 @@ refuse(Fn *fn)
 				|| rtype(i->arg[n]) == RType)
 					continue;
 				k = argcls(i, n);
-				if (k == Kl)
-					err(msg, "64-bit integers (class l)",
-						fn->name);
 				if (k == Ks || k == Kd)
 					err(msg, "floating point", fn->name);
 			}
 		}
 		switch (b->jmp.type) {
-		case Jretl:
-			err(msg, "64-bit integers (class l)", fn->name);
 		case Jrets:
 		case Jretd:
 			err(msg, "floating point", fn->name);
@@ -478,10 +531,45 @@ refuse(Fn *fn)
 		err(msg, "landing pads", fn->name);
 }
 
-/* abi0: the refusals, then the sub-word arguments and
- * returns, extended by the caller and the callee as gcc
- * does; a sub-word parameter is a word (its high bits are
- * not trusted, as on amd64)
+/* a long division is a call to libgcc's helper, as gcc makes
+ * it; an unsigned one by a power of 2 is a shift or a mask
+ */
+static void
+longdiv(Ins *i, Fn *fn)
+{
+	static char *name[] = {
+		[Odiv] = "__divdi3",
+		[Orem] = "__moddi3",
+		[Oudiv] = "__udivdi3",
+		[Ourem] = "__umoddi3",
+	};
+	int64_t v;
+	int n;
+	Con c;
+
+	if ((i->op == Oudiv || i->op == Ourem)
+	&& isconbits(fn, i->arg[1], &v) && v > 0 && (v & (v-1)) == 0) {
+		for (n=0; ((uint64_t)1 << n) != (uint64_t)v; n++)
+			;
+		if (i->op == Oudiv)
+			emit(Oshr, Kl, i->to, i->arg[0], getcon(n, fn));
+		else
+			emit(Oand, Kl, i->to, i->arg[0], getcon(v-1, fn));
+		return;
+	}
+	memset(&c, 0, sizeof c);
+	c.type = CAddr;
+	c.sym.id = intern(name[i->op]);
+	emit(Ocall, Kl, i->to, newcon(&c, fn), R);
+	emit(Oarg, Kl, R, i->arg[1], R);
+	emit(Oarg, Kl, R, i->arg[0], R);
+	fn->leaf = 0;
+}
+
+/* abi0: the refusals, the long divisions, then the sub-word
+ * arguments and returns, extended by the caller and the callee
+ * as gcc does; a sub-word parameter is a word (its high bits
+ * are not trusted, as on amd64)
  */
 void
 i386_abi0(Fn *fn)
@@ -503,7 +591,13 @@ i386_abi0(Fn *fn)
 			b->jmp.type = Jretw;
 		}
 		for (i=&b->ins[b->nins]; i>b->ins;) {
-			emiti(*--i);
+			--i;
+			if (i->cls == Kl && (i->op == Odiv || i->op == Orem
+			|| i->op == Oudiv || i->op == Ourem)) {
+				longdiv(i, fn);
+				continue;
+			}
+			emiti(*i);
 			if (isparbh(i->op))
 				curi->op = Opar;
 			if (i->op != Ocall)
