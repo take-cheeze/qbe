@@ -37,6 +37,9 @@ bits i386_argregs(Ref, int[2]);
 void i386_abi0(Fn *);
 void i386_abi(Fn *);
 
+/* long.c */
+void i386_long(Fn *);
+
 /* isel.c */
 void i386_isel(Fn *);
 

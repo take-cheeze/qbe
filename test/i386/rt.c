@@ -117,3 +117,58 @@ rt_main(void)
 		r = 1;
 	rt_exit(r);
 }
+
+/* libgcc's 64-bit divisions (there is no 32-bit libgcc here), by
+ * shifts and subtractions so that gcc makes no call itself */
+static unsigned long long
+udivmod(unsigned long long n, unsigned long long d, unsigned long long *r)
+{
+	unsigned long long q = 0;
+	int i;
+
+	if (d == 0)
+		__builtin_trap();
+	for (i = 63; i >= 0; i--) {
+		if ((d << i >> i) != d)
+			continue;
+		if (n >= d << i) {
+			n -= d << i;
+			q |= 1ull << i;
+		}
+	}
+	*r = n;
+	return q;
+}
+
+unsigned long long __udivdi3(unsigned long long n, unsigned long long d) { unsigned long long r; return udivmod(n, d, &r); }
+unsigned long long __umoddi3(unsigned long long n, unsigned long long d) { unsigned long long r; udivmod(n, d, &r); return r; }
+
+long long
+__divdi3(long long n, long long d)
+{
+	unsigned long long r, q;
+
+	q = udivmod(n < 0 ? -(unsigned long long)n : n, d < 0 ? -(unsigned long long)d : d, &r);
+	return (n < 0) != (d < 0) ? -q : q;
+}
+
+long long
+__moddi3(long long n, long long d)
+{
+	unsigned long long r;
+
+	udivmod(n < 0 ? -(unsigned long long)n : n, d < 0 ? -(unsigned long long)d : d, &r);
+	return n < 0 ? -r : r;
+}
+
+void
+rt_putx64(unsigned long long v)
+{
+	char buf[17];
+	int i;
+
+	for (i = 15; i >= 0; i--, v >>= 4)
+		buf[i] = "0123456789abcdef"[v & 15];
+	buf[16] = 0;
+	rt_puts(buf);
+}

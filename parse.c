@@ -1408,6 +1408,7 @@ printfn(Fn *fn, FILE *f)
 				case Oxtest:
 				case Oxdiv:
 				case Oxidiv:
+				case Oxmul:
 					fputc(ktoc[i->cls], f);
 				}
 			if (!req(i->arg[0], R)) {

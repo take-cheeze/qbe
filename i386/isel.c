@@ -208,6 +208,7 @@ sel(Ins i, Num *tn, Fn *fn)
 	case Oor:
 	case Oxor:
 	case Oxtest:
+	case Oxmul:
 	case_Oext:
 Emit:
 		emiti(i);
@@ -570,6 +571,9 @@ i386_isel(Fn *fn)
 	int n, al;
 	int64_t sz;
 	Num *num;
+
+	/* 64-bit integers as pairs of words */
+	i386_long(fn);
 
 	/* assign slots to fast allocs */
 	b = fn->start;
