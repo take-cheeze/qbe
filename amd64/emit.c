@@ -226,6 +226,20 @@ regtoa(int reg, int sz)
 		return rname[reg][sz];
 }
 
+/* -A (absaddr): the address of a symbol as a sign-extended 32-bit immediate, movq $sym[+off], %reg (gcc's kernel model;
+ * QBE's rip-relative lea is the physical address while the kernel runs identity-mapped) */
+static void
+emitabsaddr(Ins *i, Con *con, E *e)
+{
+	char *sym = str(con->sym.id);
+
+	fprintf(e->f, "\tmovq $%s%s", sym[0] == '"' ? "" : T.assym, sym);
+	if (con->bits.i)
+		fprintf(e->f, "%+lld", (long long)con->bits.i);
+	fprintf(e->f, ", %%%s\n", regtoa(i->to.val, SLong));
+}
+
+
 static Ref
 getarg(char c, Ins *i)
 {
@@ -516,6 +530,10 @@ emitins(Ins i, E *e)
 		if (isreg(i.to)
 		&& t0 == RCon
 		&& e->fn->con[i.arg[0].val].type == CAddr) {
+			if (absaddr && !(e->fn->con[i.arg[0].val].sym.type & SThr)) {
+				emitabsaddr(&i, &e->fn->con[i.arg[0].val], e);   /* -A: a symbol's address, not rip-relative */
+				break;
+			}
 			emitf("lea%k %M0, %=", &i, e);
 			break;
 		}
@@ -549,6 +567,10 @@ emitins(Ins i, E *e)
 		con = &e->fn->con[i.arg[0].val];
 		assert(isreg(i.to) && con->type == CAddr);
 		sym = str(con->sym.id);
+		if (absaddr && !(con->sym.type & SThr)) {
+			emitabsaddr(&i, con, e);   /* -A: a symbol's address, not rip-relative */
+			break;
+		}
 		if (T.apple && (con->sym.type & SThr)) {
 			fprintf(e->f,
 				"\tmovq %s%s@tlvp(%%rip), %%%s\n",
