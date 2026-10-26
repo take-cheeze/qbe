@@ -124,7 +124,7 @@ fixarg(Ref *r, int k, Ins *i, Fn *fn)
 		emit(Oaddr, Kl, r1, SLOT(s), R);
 	}
 	else if (op != Ocall && hascon(r0, &c, fn)
-	&& c->type == CAddr && ((c->sym.type & SExt)
+	&& c->type == CAddr && (((c->sym.type & SExt) && !(absaddr && (isload(op) || isstore(op))))
 	 || (T.apple && c->sym.type == SThr)
 	 /* nfcxx: a local symbol plus an offset a rip-relative
 	  * displacement may not reach (the kernel's

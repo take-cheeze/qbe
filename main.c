@@ -7,6 +7,7 @@ Target T;
 
 int nofp;
 int nounwind;
+int absaddr;
 static int code16;   /* -m16: i386 code run in real mode, as gcc -m16 makes it (.code16gcc) */
 char debug['Z'+1] = {
 	['P'] = 0, /* parsing */
@@ -145,7 +146,7 @@ main(int ac, char *av[])
 
 	T = Deftgt;
 	outf = stdout;
-	while ((c = getopt(ac, av, "hd:m:no:pt:U")) != -1)
+	while ((c = getopt(ac, av, "hd:m:no:pt:UA")) != -1)
 		switch (c) {
 		case 'd':
 			for (; *optarg; optarg++)
@@ -166,6 +167,9 @@ main(int ac, char *av[])
 			break;
 		case 'U':
 			nounwind = 1;
+			break;
+		case 'A':
+			absaddr = 1;
 			break;
 		case 'o':
 			if (strcmp(optarg, "-") != 0) {
