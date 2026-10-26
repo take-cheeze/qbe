@@ -583,6 +583,14 @@ emitins(Ins i, E *e)
 				regtoa(i.to.val, SLong));
 			break;
 		case SExt:
+			if (absaddr) {
+				/* -A: the address as gcc's kernel model writes it: a sign-extended 32-bit immediate */
+				fprintf(e->f, "\tmovq $%s%s", sym[0] == '"' ? "" : T.assym, sym);
+				if (con->bits.i)
+					fprintf(e->f, "%+lld", (long long)con->bits.i);
+				fprintf(e->f, ", %%%s\n", regtoa(i.to.val, SLong));
+				break;
+			}
 			/* load address from the GOT */
 			assert(!con->bits.i);
 			fprintf(e->f,
