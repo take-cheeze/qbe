@@ -266,6 +266,7 @@ struct Blk {
 
 	uint id;
 	uint visit;
+	char tail;	/* amd64: the block's call is a tail call (sysv.c, tailcallok) */
 
 	Blk *idom;
 	Blk *dom, *dlink;

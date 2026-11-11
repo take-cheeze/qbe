@@ -9,7 +9,20 @@ struct E {
 	int fp;
 	uint64_t fsz;
 	int nclob;
+	int tail;	/* the call is emitted as a jump (a tail call, sysv.c tailcallok) */
 };
+
+/* A tail call's target stays in its register through the epilogue, which restores the callee-saved registers and the
+   frame pointer: a target in one of them, or a spilled one (in the frame), is a plain call. */
+static int
+tailtarget(Ins *i)
+{
+	if (rtype(i->arg[0]) == RCon)
+		return 1;
+	return isreg(i->arg[0]) && i->arg[0].val != RBP && i->arg[0].val != RSP
+		&& i->arg[0].val != RBX && i->arg[0].val != R12 && i->arg[0].val != R13
+		&& i->arg[0].val != R14 && i->arg[0].val != R15;
+}
 
 #define CMP(X) \
 	X(Ciule,      "be", "a") \
@@ -630,7 +643,7 @@ emitins(Ins i, E *e)
 		switch (rtype(i.arg[0])) {
 		case RCon:
 			con = &e->fn->con[i.arg[0].val];
-			fprintf(e->f, "\tcallq ");
+			fprintf(e->f, e->tail ? "\tjmp " : "\tcallq ");
 			emitcon(con, e);
 			if (con->type == CAddr
 			&& (con->sym.type & SExt)
@@ -639,7 +652,10 @@ emitins(Ins i, E *e)
 			fprintf(e->f, "\n");
 			break;
 		case RTmp:
-			emitf("callq *%L0", &i, e);
+			if (e->tail)
+				emitf("jmp *%L0", &i, e);
+			else
+				emitf("callq *%L0", &i, e);
 			break;
 		default:
 			die("invalid call argument");
@@ -711,7 +727,7 @@ amd64_sysv_emitfn(Fn *fn, FILE *f)
 	};
 	static int id0;
 	Blk *b, *s;
-	Ins *i, itmp;
+	Ins *i, *last, itmp;
 	int *r, c, o, n, lbl, unw;
 	uint p;
 	E *e;
@@ -765,7 +781,12 @@ amd64_sysv_emitfn(Fn *fn, FILE *f)
 				fprintf(f, ".p2align 4\n");
 			fprintf(f, "%sbb%d:\n", T.asloc, id0+b->id);
 		}
+		/* a tail call (sysv.c tailcallok): the block's last instruction is its call, which the epilogue precedes */
+		last = b->tail && b->jmp.type == Jret0 && b->nins && b->ins[b->nins-1].op == Ocall
+			&& tailtarget(&b->ins[b->nins-1]) ? &b->ins[b->nins-1] : 0;
 		for (i=b->ins; i!=&b->ins[b->nins]; i++) {
+			if (i == last)
+				break;
 			if (i->op == Ocall)
 				ehcsbegin(fn, b, f);
 			emitins(*i, e);
@@ -797,7 +818,12 @@ amd64_sysv_emitfn(Fn *fn, FILE *f)
 				fprintf(f,
 					"\taddq $%"PRIu64", %%rsp\n",
 					e->fsz);
-			fputs("\tret\n", f);
+			if (last) {	/* the tail call: its jump takes the return's place */
+				e->tail = 1;
+				emitins(*last, e);
+				e->tail = 0;
+			} else
+				fputs("\tret\n", f);
 			if (unw)
 				fputs("\t.cfi_restore_state\n", f);
 			break;
