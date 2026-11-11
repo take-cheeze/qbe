@@ -285,6 +285,16 @@ sel(Ins i, Num *tn, Fn *fn)
 	i0 = curi;
 	k = i.cls;
 	switch (i.op) {
+	case Oxadd:
+		/* lock xadd leaves the old value in its register: the result is a copy of the addend, which the locked add
+		 * updates in memory. The address is selected first, so it is computed before the copy and the locked add. */
+		r0 = i.arg[0];
+		seladdr(&r0, tn, fn);
+		emit(Olockadd, k, R, i.to, r0);
+		emit(Ocopy, k, i.to, i.arg[1], R);
+		i1 = curi;
+		fixarg(&i1->arg[0], k, i1, fn);
+		break;
 	case Odiv:
 	case Orem:
 	case Oudiv:
