@@ -342,7 +342,8 @@ simpljmp(Fn *fn)
 	uf = emalloc(fn->nblk * sizeof uf[0]);
 	for (b=fn->start; b; b=b->link) {
 		assert(!b->phi);
-		if (b->jmp.type == Jret0) {
+		/* a tail call (amd64/sysv.c) returns from its own block: its epilogue is there */
+		if (b->jmp.type == Jret0 && !b->tail) {
 			b->jmp.type = Jjmp;
 			b->s1 = ret;
 		}
