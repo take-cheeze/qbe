@@ -667,6 +667,20 @@ returnstwice(Fn *fn, Ins *i)
 		|| !strcmp(name, "getcontext");
 }
 
+/* A call of a helper that reads the frame of its caller: cproc's __builtin_return_address and __builtin_frame_address
+   call nfcxx_return_address (movq 8(%rbp), %rax) and nfcxx_frame_address (movq %rbp, %rax). A tail call would leave the
+   caller's frame before the helper runs, so such a call stays a call. */
+static int
+framereader(Fn *fn, Ins *i)
+{
+	char *name;
+
+	if (rtype(i->arg[0]) != RCon || fn->con[i->arg[0].val].type != CAddr)
+		return 0;
+	name = str(fn->con[i->arg[0].val].sym.id);
+	return !strcmp(name, "nfcxx_return_address") || !strcmp(name, "nfcxx_frame_address");
+}
+
 /* A call that ends its block, and whose result (if any) is the block's return value: the callee can return to our caller
    itself. The emitter jumps to it after the epilogue (emit.c, tail calls). The call must be the block's last instruction
    (selret has emitted the return copy into insb, and it is the only thing there), take no stack-passed or aggregate
@@ -755,7 +769,7 @@ amd64_sysv_abi(Fn *fn)
 				for (i0=i; i0>b->ins; i0--)
 					if (!isarg((i0-1)->op))
 						break;
-				if (i == &b->ins[b->nins-1] && tailcallok(b, i0, i, nostack)) {
+				if (i == &b->ins[b->nins-1] && !framereader(fn, i) && tailcallok(b, i0, i, nostack)) {
 					curi = &insb[NIns];	/* the return copy goes: the callee's return value stays in place */
 					i->to = R;
 					b->tail = 1;
