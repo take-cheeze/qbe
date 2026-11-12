@@ -251,7 +251,8 @@ def(Slice sl, bits msk, Blk *b, Ins *i, Loc *il)
 	while (i > b->ins) {
 		--i;
 		if (killsl(i->to, sl)
-		|| (i->op == Ocall && escapes(sl.ref, curf)))
+		|| (i->op == Ocall && escapes(sl.ref, curf))
+		|| i->op == Oxadd)  /* a locked add writes memory: its address is not known here */
 			goto Load;
 		ld = isload(i->op);
 		if (ld) {
