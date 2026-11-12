@@ -277,6 +277,8 @@ wflagi(Ins *fi, Ref r, int *k, int *c)
 static void
 seljmp(Blk *b, Fn *fn)
 {
+	if (b->jmp.type == Jjtab)
+		die("jtab (nfcxx): only the amd64 target has jump tables");
 	Ref r;
 	int c, k, swap;
 	Ins *fi;

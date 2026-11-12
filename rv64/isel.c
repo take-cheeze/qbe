@@ -199,6 +199,8 @@ sel(Ins i, Fn *fn)
 static void
 seljmp(Blk *b, Fn *fn)
 {
+	if (b->jmp.type == Jjtab)
+		die("jtab (nfcxx): only the amd64 target has jump tables");
 	/* TODO: replace cmp+jnz with beq/bne/blt[u]/bge[u] */
 	if (b->jmp.type == Jjnz)
 		fixarg(&b->jmp.arg, Kw, 0, fn);

@@ -52,6 +52,7 @@ enum Token {
 	Tphi,
 	Tjmp,
 	Tjnz,
+	Tjtab,
 	Tret,
 	Thlt,
 	Texport,
@@ -112,6 +113,7 @@ static char *kwmap[Ntok] = {
 	[Tphi] = "phi",
 	[Tjmp] = "jmp",
 	[Tjnz] = "jnz",
+	[Tjtab] = "jtab",
 	[Tret] = "ret",
 	[Thlt] = "hlt",
 	[Texport] = "export",
@@ -673,6 +675,33 @@ parseline(PState ps)
 	case Tjmp:
 		curb->jmp.type = Jjmp;
 		goto Jump;
+	case Tjtab:
+		/* jtab %index, @default, @target0, @target1, ...: an index below the count selects its target (nfcxx) */
+		curb->jmp.type = Jjtab;
+		r = parseref();
+		if (req(r, R))
+			err("invalid argument for jtab jump");
+		curb->jmp.arg = r;
+		expect(Tcomma);
+		expect(Tlbl);
+		curb->s1 = findblk();
+		if (curb->s1 == curf->start)
+			err("invalid jump to the start block");
+		while (peek() == Tcomma) {
+			next();
+			expect(Tlbl);
+			b = findblk();
+			if (b == curf->start || b == curb->s1)
+				err("invalid jtab target");
+			for (uint n=0; n<curb->ntab; n++)
+				if (curb->tab[n] == b)
+					err("repeated jtab target");
+			vgrow(&curb->tab, ++curb->ntab);
+			curb->tab[curb->ntab-1] = b;
+		}
+		if (curb->ntab == 0)
+			err("jtab without a table");
+		goto Close;
 	case Tjnz:
 		curb->jmp.type = Jjnz;
 		r = parseref();
@@ -1448,6 +1477,14 @@ printfn(Fn *fn, FILE *f)
 			break;
 		case Jhlt:
 			fprintf(f, "\thlt\n");
+			break;
+		case Jjtab:
+			fprintf(f, "\tjtab ");
+			printref(b->jmp.arg, fn, f);
+			fprintf(f, ", @%s", b->s1->name);
+			for (uint n=0; n<b->ntab; n++)
+				fprintf(f, ", @%s", b->tab[n]->name);
+			fprintf(f, "\n");
 			break;
 		case Jjmp:
 			if (b->s1 != b->link)
