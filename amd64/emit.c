@@ -269,6 +269,40 @@ getarg(char c, Ins *i)
 	}
 }
 
+static void emitf(char *, Ins *, E *);
+
+/* A jump table (nfcxx, jtab): the index in its slot selects a target of the block's table, when below the count; otherwise
+ * the default (s1). The index is a 32-bit value. %rax and %rcx are the scratch registers of the dispatch: no temporary is in a
+ * register at a jtab (spill.c). The table is in the text after the function (emitjtabs), as differences from its own
+ * position, so it needs no relocation. */
+static void
+emitjtab(Blk *b, uint id0, E *e)
+{
+	Ins itmp;
+
+	itmp = (Ins){.cls = Kw};
+	itmp.arg[0] = b->jmp.arg;
+	emitf("movl %0, %%eax", &itmp, e);
+	fprintf(e->f, "\tcmpl $%u, %%eax\n\tjae %sbb%d\n", b->ntab, T.asloc, id0+b->s1->id);
+	fprintf(e->f, "\tleaq %sjt%d(%%rip), %%rcx\n", T.asloc, id0+b->id);
+	fputs("\tmovslq (%rcx,%rax,4), %rax\n\taddq %rcx, %rax\n\tjmp *%rax\n", e->f);
+}
+
+static void
+emitjtabs(Fn *fn, uint id0, E *e)
+{
+	Blk *b;
+	uint n;
+
+	for (b=fn->start; b; b=b->link)
+		if (b->jmp.type == Jjtab) {
+			fprintf(e->f, "\t.p2align 2\n%sjt%d:\n", T.asloc, id0+b->id);
+			for (n=0; n<b->ntab; n++)
+				fprintf(e->f, "\t.long %sbb%d - %sjt%d\n",
+					T.asloc, id0+b->tab[n]->id, T.asloc, id0+b->id);
+		}
+}
+
 static void emitins(Ins, E *);
 
 static void
@@ -836,6 +870,9 @@ amd64_sysv_emitfn(Fn *fn, FILE *f)
 			else
 				lbl = 0;
 			break;
+		case Jjtab:
+			emitjtab(b, id0, e);
+			break;
 		default:
 			c = b->jmp.type - Jjf;
 			if (0 <= c && c <= NCmp) {
@@ -853,6 +890,7 @@ amd64_sysv_emitfn(Fn *fn, FILE *f)
 			die("unhandled jump %d", b->jmp.type);
 		}
 	}
+	emitjtabs(fn, id0, e);
 	id0 += fn->nblk;
 	if (unw)
 		fputs("\t.cfi_endproc\n", f);
@@ -957,6 +995,9 @@ amd64_winabi_emitfn(Fn *fn, FILE *f)
 			else
 				lbl = 0;
 			break;
+		case Jjtab:
+			emitjtab(b, id0, e);
+			break;
 		default:
 			c = b->jmp.type - Jjf;
 			if (0 <= c && c <= NCmp) {
@@ -974,5 +1015,6 @@ amd64_winabi_emitfn(Fn *fn, FILE *f)
 			die("unhandled jump %d", b->jmp.type);
 		}
 	}
+	emitjtabs(fn, id0, e);
 	id0 += fn->nblk;
 }
