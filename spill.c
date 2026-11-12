@@ -390,10 +390,17 @@ spill(Fn *fn)
 				bsunion(v, u);
 			}
 		} else if (b->jmp.type == Jjtab) {
-			/* a jump table (nfcxx): no temporary stays in a register across the dispatch, which computes its
-			 * target in %rax and %rcx (amd64/emit.c); the index is loaded from its slot */
+			/* a jump table (nfcxx): the registers of its targets merge as for a branch; one register is kept for the
+			 * index, which the dispatch overwrites (amd64 isel copies the index into a temporary of its own) */
 			bszero(v);
-			v->t[0] = T.rglob | (b == fn->start ? fn->reg : 0);
+			for (k=0; k<nsuccslot(b); k++) {
+				Blk *sj = *succslot(b, k);
+				if (!sj)
+					continue;
+				liveon(w, b, sj);
+				merge(v, b, w, sj);
+			}
+			limit2(v, 1, 0, NULL);
 		} else if (s1) {
 			/* avoid reloading temporaries
 			 * in the middle of loops */
@@ -414,10 +421,8 @@ spill(Fn *fn)
 		if (rtype(b->jmp.arg) == RTmp) {
 			t = b->jmp.arg.val;
 			assert(KBASE(tmp[t].cls) == 0);
-			if (b->jmp.type == Jjtab)
-				b->jmp.arg = slot(t);
-			else {
-				bsset(v, t);
+			bsset(v, t);
+			if (b->jmp.type != Jjtab) {
 				limit2(v, 0, 0, NULL);
 				if (!bshas(v, t))
 					b->jmp.arg = slot(t);

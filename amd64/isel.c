@@ -642,10 +642,18 @@ seljmp(Blk *b, Fn *fn)
 	Ins *fi;
 	Tmp *t;
 
+	if (b->jmp.type == Jjtab) {
+		/* a jump table (emit.c's dispatch) overwrites the register of its index, so the index is copied into a temporary of
+		 * its own, which is dead after the jump: the other values live out of the block keep their registers */
+		r = newtmp("jtab", Kw, fn);
+		emit(Ocopy, Kw, r, b->jmp.arg, R);
+		chuse(r, 1, fn);
+		b->jmp.arg = r;
+		return;
+	}
 	if (b->jmp.type == Jret0
 	|| b->jmp.type == Jjmp
-	|| b->jmp.type == Jhlt
-	|| b->jmp.type == Jjtab)	/* a jtab's index is a plain use (emit.c's dispatch) */
+	|| b->jmp.type == Jhlt)
 		return;
 	assert(b->jmp.type == Jjnz);
 	r = b->jmp.arg;
