@@ -303,8 +303,17 @@ copyref(Fn *fn, Blk *b, Ins *i)
 	int64_t v;
 	int w, z;
 
-	if (i->op == Ocopy)
+	if (i->op == Ocopy) {
+		/* the address of a thread-local symbol is a thread
+		 * pointer load and an add, at every use that the
+		 * copy would be replaced in: keep the copy, so that
+		 * the uses share its register */
+		if (rtype(i->arg[0]) == RCon
+		&& fn->con[i->arg[0].val].type == CAddr
+		&& fn->con[i->arg[0].val].sym.type & SThr)
+			return R;
 		return i->arg[0];
+	}
 
 	/* op identity value */
 	if (optab[i->op].hasid
