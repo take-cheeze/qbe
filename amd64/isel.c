@@ -276,6 +276,7 @@ sel(Ins i, Num *tn, Fn *fn)
 	Ins *i0, *i1;
 
 	if (rtype(i.to) == RTmp)
+	if (i.op != Oxadd)   /* a locked add has an effect: its unused old value does not make it dead */
 	if (!isreg(i.to) && !isreg(i.arg[0]) && !isreg(i.arg[1]))
 	if (fn->tmp[i.to.val].nuse == 0) {
 		chuse(i.arg[0], -1, fn);
