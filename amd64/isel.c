@@ -644,7 +644,8 @@ seljmp(Blk *b, Fn *fn)
 
 	if (b->jmp.type == Jret0
 	|| b->jmp.type == Jjmp
-	|| b->jmp.type == Jhlt)
+	|| b->jmp.type == Jhlt
+	|| b->jmp.type == Jjtab)	/* a jtab's index is a plain use (emit.c's dispatch) */
 		return;
 	assert(b->jmp.type == Jjnz);
 	r = b->jmp.arg;

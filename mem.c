@@ -212,7 +212,7 @@ coalesce(Fn *fn)
 {
 	Range r, *br;
 	Slot *s, *s0, *sl;
-	Blk *b, **ps, *succ[3];
+	Blk *b;
 	Ins *i, **bl;
 	Use *u;
 	Tmp *t, *ts;
@@ -263,14 +263,14 @@ coalesce(Fn *fn)
 	ip = INT_MAX - 1;
 	for (n=fn->nblk-1; n>=0; n--) {
 		b = fn->rpo[n];
-		succ[0] = b->s1;
-		succ[1] = b->s2;
-		succ[2] = 0;
 		br[n].b = ip--;
 		for (s=sl; s<&sl[nsl]; s++) {
 			s->l = 0;
-			for (ps=succ; *ps; ps++) {
-				m = (*ps)->id;
+			for (uint k=0; k<nsuccslot(b); k++) {
+				Blk *sb = *succslot(b, k);
+				if (!sb)
+					continue;
+				m = sb->id;
 				if (m > n && rin(s->r, br[m].a)) {
 					s->l = s->m;
 					radd(&s->r, ip);

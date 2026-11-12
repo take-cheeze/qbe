@@ -167,7 +167,7 @@ enum J {
 	X(jfisle) X(jfislt) X(jfiuge) X(jfiugt) \
 	X(jfiule) X(jfiult) X(jffeq)  X(jffge)  \
 	X(jffgt)  X(jffle)  X(jfflt)  X(jffne)  \
-	X(jffo)   X(jffuo)  X(hlt)
+	X(jffo)   X(jffuo)  X(hlt)      X(jtab)
 #define X(j) J##j,
 	JMPS(X)
 #undef X
@@ -262,6 +262,10 @@ struct Blk {
 	} jmp;
 	Blk *s1;
 	Blk *s2;
+	/* jtab (nfcxx): an index in jmp.arg selects tab[index] when it is below ntab; otherwise s1 (the default). s2 is 0. */
+	Blk **tab;
+	uint ntab;
+	int keep;	/* nfcxx: a jtab target, reached only through its table: simpljmp must not remove it */
 	Blk *link;
 
 	uint id;
@@ -559,6 +563,11 @@ void elimsb(Fn *);
 
 /* cfg.c */
 Blk *newblk(void);
+/* successors (nfcxx): slot 0 is s1, slot 1 is s2, slots 2.. are the jtab table; a slot may be null */
+Blk **succslot(Blk *, uint);
+uint nsuccslot(Blk *);
+int hassucc(Blk *, Blk *);
+int multisucc(Blk *);
 void fillpreds(Fn *);
 void fillcfg(Fn *);
 void filldom(Fn *);

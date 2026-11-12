@@ -389,6 +389,11 @@ spill(Fn *fn)
 					limit(u, n, 0);
 				bsunion(v, u);
 			}
+		} else if (b->jmp.type == Jjtab) {
+			/* a jump table (nfcxx): no temporary stays in a register across the dispatch, which computes its
+			 * target in %rax and %rcx (amd64/emit.c); the index is loaded from its slot */
+			bszero(v);
+			v->t[0] = T.rglob | (b == fn->start ? fn->reg : 0);
 		} else if (s1) {
 			/* avoid reloading temporaries
 			 * in the middle of loops */
@@ -409,10 +414,14 @@ spill(Fn *fn)
 		if (rtype(b->jmp.arg) == RTmp) {
 			t = b->jmp.arg.val;
 			assert(KBASE(tmp[t].cls) == 0);
-			bsset(v, t);
-			limit2(v, 0, 0, NULL);
-			if (!bshas(v, t))
+			if (b->jmp.type == Jjtab)
 				b->jmp.arg = slot(t);
+			else {
+				bsset(v, t);
+				limit2(v, 0, 0, NULL);
+				if (!bshas(v, t))
+					b->jmp.arg = slot(t);
+			}
 		}
 		for (t=Tmp0; bsiter(b->out, &t); t++)
 			if (!bshas(v, t))
