@@ -269,6 +269,47 @@ getarg(char c, Ins *i)
 	}
 }
 
+static void emitf(char *, Ins *, E *);
+
+/* A jump table (nfcxx, jtab %index, @default, @t0, ...): the index is a register (the isel copy of the index), which the
+ * dispatch overwrites: it is zero-extended, checked against the count (the default when not below it), then scaled and
+ * added to the table's address, which is held in memory (a relocated quad, so the code needs no relocation and no scratch
+ * register). The table is in .data.rel.ro after the function (emitjtabs). */
+static void
+emitjtab(Blk *b, uint id0, E *e)
+{
+	FILE *f = e->f;
+	int r;
+
+	if (rtype(b->jmp.arg) != RTmp || !isreg(b->jmp.arg))
+		die("jtab: the index is not in a register");
+	r = b->jmp.arg.val;
+	fprintf(f, "\tmovl %%%s, %%%s\n", regtoa(r, SWord), regtoa(r, SWord));
+	fprintf(f, "\tcmpl $%u, %%%s\n", b->ntab, regtoa(r, SWord));
+	fprintf(f, "\tjae %sbb%d\n", T.asloc, id0+b->s1->id);
+	fprintf(f, "\tshlq $3, %%%s\n", regtoa(r, SLong));
+	fprintf(f, "\taddq %sjtp%d(%%rip), %%%s\n", T.asloc, id0+b->id, regtoa(r, SLong));
+	fprintf(f, "\tjmp *(%%%s)\n", regtoa(r, SLong));
+}
+
+/* the tables, after the function (their section is restored to .text) */
+static void
+emitjtabs(Fn *fn, uint id0, E *e)
+{
+	Blk *b;
+	uint n;
+
+	for (b=fn->start; b; b=b->link)
+		if (b->jmp.type == Jjtab) {
+			fprintf(e->f, "\t.section .data.rel.ro,\"aw\"\n\t.p2align 3\n");
+			fprintf(e->f, "%sjtp%d:\n\t.quad %sjt%d\n", T.asloc, id0+b->id, T.asloc, id0+b->id);
+			fprintf(e->f, "%sjt%d:\n", T.asloc, id0+b->id);
+			for (n=0; n<b->ntab; n++)
+				fprintf(e->f, "\t.quad %sbb%d\n", T.asloc, id0+b->tab[n]->id);
+			fputs("\t.text\n", e->f);
+		}
+}
+
 static void emitins(Ins, E *);
 
 static void
@@ -836,6 +877,9 @@ amd64_sysv_emitfn(Fn *fn, FILE *f)
 			else
 				lbl = 0;
 			break;
+		case Jjtab:
+			emitjtab(b, id0, e);
+			break;
 		default:
 			c = b->jmp.type - Jjf;
 			if (0 <= c && c <= NCmp) {
@@ -858,6 +902,7 @@ amd64_sysv_emitfn(Fn *fn, FILE *f)
 		fputs("\t.cfi_endproc\n", f);
 	if (!T.apple)
 		elf_emitfnfin(fn->name, f);
+	emitjtabs(fn, id0 - fn->nblk, e);
 	ehfnend(fn, f);
 }
 
@@ -957,6 +1002,8 @@ amd64_winabi_emitfn(Fn *fn, FILE *f)
 			else
 				lbl = 0;
 			break;
+		case Jjtab:
+			die("jtab: not on the amd64_win target");
 		default:
 			c = b->jmp.type - Jjf;
 			if (0 <= c && c <= NCmp) {

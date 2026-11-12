@@ -78,6 +78,10 @@ Again:
 			liveon(v, b, b->s2);
 			bsunion(b->out, v);
 		}
+		for (uint k=2; k<nsuccslot(b); k++) {
+			liveon(v, b, *succslot(b, k));
+			bsunion(b->out, v);
+		}
 		if (f->eh_lp && b != f->eh_lp && blkhascall(b)) {
 			liveon(v, b, f->eh_lp);
 			bsunion(b->out, v);

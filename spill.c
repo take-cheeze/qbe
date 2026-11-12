@@ -389,6 +389,18 @@ spill(Fn *fn)
 					limit(u, n, 0);
 				bsunion(v, u);
 			}
+		} else if (b->jmp.type == Jjtab) {
+			/* a jump table (nfcxx): the registers of its targets merge as for a branch; one register is kept for the
+			 * index, which the dispatch overwrites (amd64 isel copies the index into a temporary of its own) */
+			bszero(v);
+			for (k=0; k<nsuccslot(b); k++) {
+				Blk *sj = *succslot(b, k);
+				if (!sj)
+					continue;
+				liveon(w, b, sj);
+				merge(v, b, w, sj);
+			}
+			limit2(v, 1, 0, NULL);
 		} else if (s1) {
 			/* avoid reloading temporaries
 			 * in the middle of loops */
@@ -410,9 +422,11 @@ spill(Fn *fn)
 			t = b->jmp.arg.val;
 			assert(KBASE(tmp[t].cls) == 0);
 			bsset(v, t);
-			limit2(v, 0, 0, NULL);
-			if (!bshas(v, t))
-				b->jmp.arg = slot(t);
+			if (b->jmp.type != Jjtab) {
+				limit2(v, 0, 0, NULL);
+				if (!bshas(v, t))
+					b->jmp.arg = slot(t);
+			}
 		}
 		for (t=Tmp0; bsiter(b->out, &t); t++)
 			if (!bshas(v, t))
