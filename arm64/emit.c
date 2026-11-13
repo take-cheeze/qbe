@@ -583,6 +583,7 @@ arm64_emitfn(Fn *fn, FILE *out)
 	static int id0;
 	int s, n, c, lbl, unw, *r;
 	uint64_t o;
+	int64_t sv;
 	Blk *b, *t;
 	Ins *i;
 	E *e;
@@ -650,11 +651,13 @@ arm64_emitfn(Fn *fn, FILE *out)
 			s -= 2;
 			i = &(Ins){.arg = {TMP(*r), SLOT(s)}};
 			i->op = *r >= V0 ? Ostored : Ostorel;
+			/* the slot is read before the store: emitins rewrites an out-of-range slot operand into an address temporary */
+			sv = slot(i->arg[1], e);
 			emitins(i, e);
 			if (unw)
 				fprintf(e->f, "\t.cfi_offset %s, %"PRId64"\n",
 					rname(*r, *r >= V0 ? Kd : Kl),
-					(int64_t)slot(i->arg[1], e) - (int64_t)o);
+					(int64_t)sv - (int64_t)o);
 		}
 
 	for (lbl=0, b=e->fn->start; b; b=b->link) {
