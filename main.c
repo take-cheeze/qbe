@@ -98,6 +98,8 @@ func(Fn *fn)
 	filldom(fn);
 	gcm(fn);
 	filluse(fn);
+	licm(fn);
+	filluse(fn);
 	ssacheck(fn);
 	if (T.cansel) {
 		ifconvert(fn);
