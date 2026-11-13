@@ -128,6 +128,7 @@ static struct {
 	{ Oaddr,    Ki, "lea%k %M0, %=" },
 	{ Oswap,    Ki, "xchg%k %0, %1" },
 	{ Olockadd, Ki, "lock xadd%k %0, %M1" },
+	{ Olockcmpxchg, Ki, "lock cmpxchg%k %0, %M1" },
 	{ Osign,    Kl, "cqto" },
 	{ Osign,    Kw, "cltd" },
 	{ Oxdiv,    Ki, "div%k %0" },

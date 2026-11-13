@@ -324,6 +324,9 @@ schedins(Fn *fn, Blk *b, Ins *i, Ins **pvins, uint *pnins)
 			t = &fn->tmp[i->arg[n].val];
 			if (t->bid != b->id || !t->def)
 				continue;
+			/* a definition inside the group is scheduled with it (a cmpxchg1 uses its cmpxchg0's result) */
+			if (t->def >= i0 && t->def < i1)
+				continue;
 			schedins(fn, b, t->def, pvins, pnins);
 		}
 	for (i=i0; i<i1; i++) {

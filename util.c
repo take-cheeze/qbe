@@ -270,6 +270,14 @@ igroup(Blk *b, Ins *i, Ins **i0, Ins **i1)
 		*i0 = i - 1;
 		*i1 = i + 1;
 		return;
+	case Ocmpxchg1:
+		*i0 = i - 1;
+		*i1 = i + 1;
+		return;
+	case Ocmpxchg0:
+		*i0 = i;
+		*i1 = i + 2;
+		return;
 	case_Opar:
 		for (; i>ib && ispar((i-1)->op); i--)
 			;
