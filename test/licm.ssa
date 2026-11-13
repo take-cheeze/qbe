@@ -1,0 +1,101 @@
+# loop-invariant loads (licm.c): a load of memory that no instruction of the loop writes moves to the preheader when its
+# block dominates every exit of the loop. Each function below is checked against the driver.
+# A load in a block that does not dominate the exit (the body of a loop whose header tests first) stays in the loop,
+# so with a null pointer and no iteration nothing is read; a store or a call in the loop keeps the load in the loop too.
+
+# The single-block loop: the load is in the header, which is also the latch and the only exit test. Moves out.
+export function w $sum_inv(l %p, w %n) {
+@start
+	jmp @loop
+@loop
+	%i =w phi @start 0, @loop %i2
+	%s =w phi @start 0, @loop %s2
+	%v =w loadw %p
+	%s2 =w add %s, %v
+	%i2 =w add %i, 1
+	%c =w csltw %i2, %n
+	jnz %c, @loop, @done
+@done
+	ret %s2
+}
+
+# The load is in the body of a loop whose header tests first: it does not dominate the exit, so it stays. With n = 0
+# the body never runs, and a null p is never read.
+export function w $body_load(l %p, w %n) {
+@start
+	jmp @head
+@head
+	%i =w phi @start 0, @body %i2
+	%s =w phi @start 0, @body %s2
+	%c =w csltw %i, %n
+	jnz %c, @body, @done
+@body
+	%v =w loadw %p
+	%s2 =w add %s, %v
+	%i2 =w add %i, 1
+	jmp @head
+@done
+	ret %s
+}
+
+# A store in the loop: the load reads what the loop wrote, so it stays in the loop.
+export function w $store_loop(l %p, w %n) {
+@start
+	jmp @loop
+@loop
+	%i =w phi @start 0, @loop %i2
+	storew %i, %p
+	%v =w loadw %p
+	%i2 =w add %i, 1
+	%c =w csltw %i2, %n
+	jnz %c, @loop, @done
+@done
+	ret %v
+}
+
+# A call in the loop (bump writes *p): the load stays in the loop.
+export function w $bump(l %p) {
+@start
+	%v =w loadw %p
+	%v2 =w add %v, 1
+	storew %v2, %p
+	ret 0
+}
+
+export function w $call_loop(l %p, w %n) {
+@start
+	jmp @loop
+@loop
+	%i =w phi @start 0, @loop %i2
+	%r =w call $bump(l %p)
+	%v =w loadw %p
+	%i2 =w add %i, 1
+	%c =w csltw %i2, %n
+	jnz %c, @loop, @done
+@done
+	ret %v
+}
+
+# >>> driver
+# #include <stdio.h>
+# int sum_inv(void *, int);
+# int body_load(void *, int);
+# int store_loop(void *, int);
+# int call_loop(void *, int);
+# int main(void) {
+# 	int x = 3, y = 5, z = 0;
+# 	printf("%d\n", sum_inv(&x, 4));
+# 	printf("%d\n", body_load(0, 0));
+# 	printf("%d\n", body_load(&y, 2));
+# 	printf("%d\n", store_loop(&z, 4));
+# 	printf("%d\n", call_loop(&z, 3));
+# 	return 0;
+# }
+# <<<
+# >>> output
+# 12
+# 0
+# 10
+# 3
+# 6
+# <<<
