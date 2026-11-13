@@ -635,6 +635,43 @@ selsel(Fn *fn, Blk *b, Ins *i, Num *tn)
 	return isel0;
 }
 
+/* The pair cmpxchg0 (address, expected) and cmpxchg1 (the head, desired): lock cmpxchg compares %rax with the memory and
+ * leaves the old memory value in %rax, so the expected value goes into %rax first and the result is copied from it. The
+ * address is selected first, as for xadd; the desired value must not be in %rax, which the fixed copies keep it out of. */
+static Ins *
+selcmpxchg(Fn *fn, Blk *b, Ins *i, Num *tn)
+{
+	Ref r0, r1;
+	Ins *ih, *i1;
+	int k;
+
+	assert(i->op == Ocmpxchg1);
+	assert(i > b->ins && (i-1)->op == Ocmpxchg0);
+	ih = i - 1;
+	k = i->cls;
+	r0 = ih->arg[0];
+	seladdr(&r0, tn, fn);
+	/* lock cmpxchg takes its desired value in a register, not as an immediate: a constant is copied into a temporary,
+	 * which is emitted last (so it comes first). */
+	r1 = i->arg[1];
+	if (rtype(r1) == RCon)
+		r1 = newtmp("isel", k, fn);
+	emit(Ocopy, k, i->to, TMP(RAX), R);
+	emit(Olockcmpxchg, k, R, r1, r0);
+	i1 = curi;
+	fixarg(&i1->arg[0], k, i1, fn);
+	emit(Ocopy, k, TMP(RAX), ih->arg[1], R);
+	i1 = curi;
+	fixarg(&i1->arg[0], k, i1, fn);
+	if (!req(r1, i->arg[1])) {
+		emit(Ocopy, k, r1, i->arg[1], R);
+		i1 = curi;
+		fixarg(&i1->arg[0], k, i1, fn);
+	}
+	*ih = (Ins){.op = Onop};
+	return ih;
+}
+
 static void
 seljmp(Blk *b, Fn *fn)
 {
@@ -986,6 +1023,8 @@ amd64_isel(Fn *fn)
 			assert(i->op != Osel0);
 			if (i->op == Osel1)
 				i = selsel(fn, b, i, num);
+			else if (i->op == Ocmpxchg1)
+				i = selcmpxchg(fn, b, i, num);
 			else
 				sel(*i, num, fn);
 		}

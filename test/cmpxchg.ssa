@@ -1,0 +1,70 @@
+# compare-and-exchange as a pair (cmpxchg0 address, expected; cmpxchg1 pair, desired): the old value of the memory
+# is the result, and the desired value is stored when the memory held the expected one
+export function w $cas_w(l %p, w %e, w %d) {
+@start
+	%h =w cmpxchg0 %p, %e
+	%old =w cmpxchg1 %h, %d
+	ret %old
+}
+
+export function l $cas_l(l %p, l %e, l %d) {
+@start
+	%h =l cmpxchg0 %p, %e
+	%old =l cmpxchg1 %h, %d
+	ret %old
+}
+
+export function w $cas_k(l %p) {
+@start
+	%h =w cmpxchg0 %p, 5
+	%old =w cmpxchg1 %h, 7
+	ret %old
+}
+
+export function w $cas_unused(l %p, w %e) {
+@start
+	%h =w cmpxchg0 %p, %e
+	%x =w cmpxchg1 %h, 1
+	ret 0
+}
+
+export function w $main() {
+@start
+	%x =l alloc8 8
+	%y =l alloc4 4
+	storel 10, %x
+	storew 4, %y
+	%r1 =w call $cas_w(l %y, w 4, w 9)      # success: old 4, *y = 9
+	%c1 =w ceqw %r1, 4
+	%v1 =w loadw %y
+	%c2 =w ceqw %v1, 9
+	%r2 =w call $cas_w(l %y, w 4, w 1)      # failure: old 9, *y stays 9
+	%c3 =w ceqw %r2, 9
+	%v2 =w loadw %y
+	%c4 =w ceqw %v2, 9
+	%r3 =l call $cas_l(l %x, l 10, l 20)
+	%c5 =w ceql %r3, 10
+	%v3 =l loadl %x
+	%c6 =w ceql %v3, 20
+	%r4 =l call $cas_l(l %x, l 10, l 30)    # failure on 64 bits
+	%c7 =w ceql %r4, 20
+	%v4 =l loadl %x
+	%c8 =w ceql %v4, 20
+	%z =l alloc4 4
+	storew 5, %z
+	%r5 =w call $cas_k(l %z)
+	%c9 =w ceqw %r5, 5
+	%v5 =w loadw %z
+	%c10 =w ceqw %v5, 7
+	%c11 =w and %c1, %c2
+	%c12 =w and %c3, %c4
+	%c13 =w and %c5, %c6
+	%c14 =w and %c7, %c8
+	%c15 =w and %c9, %c10
+	%t1 =w and %c11, %c12
+	%t2 =w and %c13, %c14
+	%t3 =w and %t1, %t2
+	%t4 =w and %t3, %c15
+	%fail =w xor %t4, 1
+	ret %fail
+}
