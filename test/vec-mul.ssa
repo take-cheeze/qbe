@@ -1,0 +1,47 @@
+# int32 multiply on the vector lanes, with SSE2 only (pmuludq on the even and odd lanes).
+# The products wrap; the driver checks them against C's int multiplication.
+
+export
+function w $imul3(l %a, l %b, w %k, w %n) {
+@start
+@head
+	%i =w phi @start 0, @latch %i2
+	%c =w csltw %i, %n
+	jnz %c, @body, @done
+@body
+	%t =l extsw %i
+	%o =l mul %t, 4
+	%pb =l add %b, %o
+	%x =w loadsw %pb
+	%y =w mul %x, %k
+	%pa =l add %a, %o
+	storew %y, %pa
+	jmp @latch
+@latch
+	%i2 =w add %i, 1
+	jmp @head
+@done
+	ret 0
+}
+
+# >>> driver
+# #include <stdio.h>
+# void imul3(int *, int *, int, int);
+# int A[41], B[41];
+# int main() {
+# 	int ks[] = { 3, -7, 65537, 1234567, -2147483647 };
+# 	int q, n, i, bad = 0;
+# 	for (q = 0; q < 5; q++)
+# 		for (n = 0; n <= 37; n++) {
+# 			for (i = 0; i < 41; i++) { A[i] = -1; B[i] = i * 1000003 - 17 * i * i + (i & 1 ? -5 : 2147483000); }
+# 			imul3(A, B, ks[q], n);
+# 			for (i = 0; i < 41; i++) {
+# 				unsigned int p = (unsigned int)B[i] * (unsigned int)ks[q];
+# 				int want = i < n ? (int)p : -1;
+# 				if (A[i] != want) bad++;
+# 			}
+# 		}
+# 	printf("bad=%d\n", bad);
+# 	return bad != 0;
+# }
+# <<<

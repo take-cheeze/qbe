@@ -507,6 +507,11 @@ Emit:
 	case Ovecext2w:
 	case Ovecext3w:
 		goto Emit;
+	case Ovecmuludq:
+	case Ovecsrlq32:
+	case Ovecpack02:
+	case Ovecunpckl32:
+		goto Emit;
 	default:
 		if (isext(i.op))
 			goto case_Oext;
