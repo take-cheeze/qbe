@@ -257,6 +257,11 @@ O(vecext2s, T(e,e,d,e, e,e,e,e), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)   /* lane
 O(vecext3s, T(e,e,d,e, e,e,e,e), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)   /* lane 3 */
 O(vecext0d, T(e,e,e,d, e,e,e,e), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)   /* lane 0 of a vector of doubles, to a d */
 O(vecext1d, T(e,e,e,d, e,e,e,e), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)   /* lane 1 */
+O(vecshufe, T(e,e,e,d, e,e,e,d), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)   /* shufps 0x88: the even lanes of two vectors */
+O(vecshufo, T(e,e,e,d, e,e,e,d), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)   /* shufps 0xdd: the odd lanes */
+O(vecunpckh32, T(e,e,e,d, e,e,e,d), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0) /* punpckhdq: interleave the high halves */
+O(vecunpcklpd, T(e,e,e,d, e,e,e,d), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0) /* unpcklpd: the low doubles */
+O(vecunpckhpd, T(e,e,e,d, e,e,e,d), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0) /* unpckhpd: the high doubles */
 O(vecmuludq, T(e,e,e,d, e,e,e,d), F(0,0,0,1,0,0,0,0,0,0)) X(0,0,0) V(0)   /* pmuludq: the products of the even lanes, 64-bit */
 O(vecsrlq32, T(e,e,e,d, e,e,e,e), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)   /* psrlq 32: each 64-bit lane shifted down */
 O(vecpack02, T(e,e,e,d, e,e,e,e), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)   /* pshufd 0x88: lanes 0 and 2 to the low half */

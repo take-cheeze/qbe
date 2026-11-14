@@ -90,6 +90,9 @@ struct Loop {
 	char *dch;	/* per temporary: defined in the body (not the latch) */
 	char *idx;	/* per temporary: an index derived from i */
 	char *adr;	/* per temporary: an address (base + index) */
+	char *strd;	/* per address: a stride-2 access (two vectors, shuffled) */
+	int anystrd;
+	Ref strz, strodd;	/* build: zero, and the odd lanes' mask, for the stride-2 stores */
 	char *lane;	/* per temporary: a vector value, its lane kind */
 	int64_t *step;	/* per index or address: its step in bytes per i */
 	int64_t *ioff;	/* per index or address: its constant byte offset */
@@ -204,8 +207,14 @@ access(Loop *lp, Ref a, int size, int kind, int store, struct Stats *st)
 	Ref b;
 	int j;
 
-	if (!isadr(lp, a) || lp->step[a.val] != size)
+	if (!isadr(lp, a) || (lp->step[a.val] != size && lp->step[a.val] != 2*size))
 		return 0;
+	/* a stride-2 access covers the element and its neighbour: its base is then of size 2*size */
+	if (lp->step[a.val] == 2*size) {
+		lp->strd[a.val] = 1;
+		lp->anystrd = 1;
+		size = 2*size;
+	}
 	b = lp->base[a.val];
 	for (j=0; j<lp->nbref; j++)
 		if (req(lp->bref[j], b))
@@ -508,6 +517,8 @@ findloop(Fn *fn, Blk *H, Loop *lp)
 	lp->dch = emalloc(nt);
 	lp->idx = emalloc(nt);
 	lp->adr = emalloc(nt);
+	lp->strd = emalloc(nt);
+	lp->anystrd = 0;
 	lp->lane = emalloc(nt);
 	lp->step = emalloc(nt * sizeof lp->step[0]);
 	lp->ioff = emalloc(nt * sizeof lp->ioff[0]);
@@ -587,6 +598,8 @@ findloop(Fn *fn, Blk *H, Loop *lp)
 		return rej(__LINE__);
 	lp->vf = st.hasd ? 2 : 4;
 	lp->nst = st.nst;
+	if (lp->anystrd && lp->ivstep < 0)
+		return rej(__LINE__);	/* the stride-2 windows are taken counting up only */
 	/* a store and another access of its base: their distance in elements is 0, or at least VF */
 	for (k=0; k<(uint)lp->nacc; k++) {
 		int64_t d, sz;
@@ -838,6 +851,22 @@ build(Fn *fn, Loop *lp)
 
 	/* the identity vector of each reduction, set up at P: 0, or all ones for and */
 	nib = 0;
+	if (lp->anystrd) {
+		/* the stride-2 stores merge with the old lanes: zero, and the odd lanes' mask (all ones there) */
+		Ref zc, oc, zv, ov1;
+		zc = newtmp("vec", Kw, fn);
+		push(Ocopy, Kw, zc, getcon(0, fn), R);
+		zv = newvec(fn);
+		push(Ovecbcastw, Kd, zv, zc, R);
+		oc = newtmp("vec", Kw, fn);
+		push(Ocopy, Kw, oc, getcon(-1, fn), R);
+		ov1 = newvec(fn);
+		push(Ovecbcastw, Kd, ov1, oc, R);
+		lp->strz = zv;
+		lp->strodd = newvec(fn);
+		/* the odd dwords (or doubles) of zero and ones: [0, -1, 0, -1] or [0, -1] */
+		push(lp->vf == 2 ? Ovecunpckhpd : Ovecunpckh32, Kd, lp->strodd, zv, ov1);
+	}
 	for (k=0; k<(uint)nred; k++) {
 		/* the identity: all ones for and; zero for add, or and xor (and +0.0 for a float add) */
 		c = newtmp("vec", Kw, fn);
@@ -904,6 +933,19 @@ build(Fn *fn, Loop *lp)
 			switch (ins->op) {
 			case Oloadsw:
 			case Oload:
+				if (lp->strd[ins->arg[0].val]) {
+					/* two vectors, and the even lanes of them: the stride-2 window */
+					Ref a0 = cloneref(lp, ins->arg[0]);
+					Ref a16 = newtmp("vec", Kl, fn);
+					Ref v0 = newvec(fn), v1 = newvec(fn);
+					push(Oadd, Kl, a16, a0, getcon(16, fn));
+					push(Ovecload, Kd, v0, a0, R);
+					push(Ovecload, Kd, v1, a16, R);
+					t = newvec(fn);
+					push(lp->vf == 2 ? Ovecunpcklpd : Ovecshufe, Kd, t, v0, v1);
+					lp->map[ins->to.val] = t;
+					continue;
+				}
 				t = newvec(fn);
 				push(Ovecload, Kd, t, cloneref(lp, ins->arg[0]), R);
 				lp->map[ins->to.val] = t;
@@ -911,6 +953,27 @@ build(Fn *fn, Loop *lp)
 			case Ostorew:
 			case Ostores:
 			case Ostored:
+				if (lp->strd[ins->arg[1].val]) {
+					/* the value's lanes go to the even positions of two vectors; the odd ones keep their values */
+					Ref a0 = cloneref(lp, ins->arg[1]);
+					Ref a16 = newtmp("vec", Kl, fn);
+					Ref x = lp->map[ins->arg[0].val];
+					Ref xs = newvec(fn), xh = newvec(fn), o0 = newvec(fn), o1 = newvec(fn);
+					Ref m0 = newvec(fn), m1 = newvec(fn), out0 = newvec(fn), out1 = newvec(fn);
+					int kd = lp->vf == 2;
+					push(Oadd, Kl, a16, a0, getcon(16, fn));
+					push(kd ? Ovecunpcklpd : Ovecunpckl32, Kd, xs, x, lp->strz);
+					push(kd ? Ovecunpckhpd : Ovecunpckh32, Kd, xh, x, lp->strz);
+					push(Ovecload, Kd, o0, a0, R);
+					push(Ovecload, Kd, o1, a16, R);
+					push(Ovecandw, Kd, m0, o0, lp->strodd);
+					push(Ovecandw, Kd, m1, o1, lp->strodd);
+					push(Ovecorw, Kd, out0, xs, m0);
+					push(Ovecorw, Kd, out1, xh, m1);
+					push(Ovecstore, Kw, R, out0, a0);
+					push(Ovecstore, Kw, R, out1, a16);
+					continue;
+				}
 				push(Ovecstore, Kw, R, lp->map[ins->arg[0].val], cloneref(lp, ins->arg[1]));
 				continue;
 			default:
@@ -1018,6 +1081,8 @@ build(Fn *fn, Loop *lp)
 	/* the vector's lanes are in the loop when they all pass the exit test */
 	delta = lp->cmpop == 0 ? lp->vf : lp->cmpop == 1 ? lp->vf - 1
 		: lp->cmpop == 2 ? -lp->vf : -(lp->vf - 1);
+	if (lp->anystrd)
+		delta += 1;	/* the last window's second half ends at element 2*(vb+VF)-1 */
 	push(Oadd, lp->ivcls, tt, iv, getcon(delta, fn));
 	if (lp->cmpop <= 1)
 		push(lp->ivcls == Kw ? Ocslew : Ocslel, lp->ivcls, cc, tt, lp->n);
@@ -1070,6 +1135,7 @@ vec(Fn *fn)
 		free(lp.dch);
 		free(lp.idx);
 		free(lp.adr);
+		free(lp.strd);
 		free(lp.lane);
 		free(lp.step);
 		free(lp.ioff);
