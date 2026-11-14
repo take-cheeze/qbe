@@ -1,0 +1,134 @@
+# 256-bit (AVX2) loops, qbe -V -Y: int32 and float32 element-wise loops, eight lanes each, with the
+# scalar tail for the trip counts that are not a multiple of eight.
+
+export
+function w $wmad(l %a, l %b, w %k, w %n) {
+@start
+@head
+	%i =w phi @start 0, @latch %i2
+	%c =w csltw %i, %n
+	jnz %c, @body, @done
+@body
+	%t =l extsw %i
+	%o =l mul %t, 4
+	%pb =l add %b, %o
+	%x =w loadsw %pb
+	%m =w mul %x, 3
+	%y =w add %m, %k
+	%pa =l add %a, %o
+	storew %y, %pa
+	jmp @latch
+@latch
+	%i2 =w add %i, 1
+	jmp @head
+@done
+	ret 0
+}
+
+export
+function w $wsub(l %a, l %b, l %c, w %n) {
+@start
+@head
+	%i =w phi @start 0, @latch %i2
+	%c0 =w csltw %i, %n
+	jnz %c0, @body, @done
+@body
+	%t =l extsw %i
+	%o =l mul %t, 4
+	%pb =l add %b, %o
+	%pc =l add %c, %o
+	%x =w loadsw %pb
+	%z =w loadsw %pc
+	%y =w sub %x, %z
+	%pa =l add %a, %o
+	storew %y, %pa
+	jmp @latch
+@latch
+	%i2 =w add %i, 1
+	jmp @head
+@done
+	ret 0
+}
+
+export
+function w $fscale(l %a, l %b, w %n) {
+@start
+@head
+	%i =w phi @start 0, @latch %i2
+	%c =w csltw %i, %n
+	jnz %c, @body, @done
+@body
+	%t =l extsw %i
+	%o =l mul %t, 4
+	%pb =l add %b, %o
+	%x =s loads %pb
+	%y =s mul %x, s_2.5
+	%pa =l add %a, %o
+	stores %y, %pa
+	jmp @latch
+@latch
+	%i2 =w add %i, 1
+	jmp @head
+@done
+	ret 0
+}
+
+export
+function w $winplace(l %a, w %n) {
+@start
+@head
+	%i =w phi @start 0, @latch %i2
+	%c =w csltw %i, %n
+	jnz %c, @body, @done
+@body
+	%t =l extsw %i
+	%o =l mul %t, 4
+	%pa =l add %a, %o
+	%x =w loadsw %pa
+	%m =w mul %x, 3
+	%y =w add %m, 1
+	storew %y, %pa
+	jmp @latch
+@latch
+	%i2 =w add %i, 1
+	jmp @head
+@done
+	ret 0
+}
+
+# >>> driver
+# #include <stdio.h>
+# int wmad(int *, int *, int, int);
+# int wsub(int *, int *, int *, int);
+# int fscale(float *, float *, int);
+# int winplace(int *, int);
+# static int bad;
+# #define CHECK(c) do { if (!(c)) { bad++; printf("FAIL line %d\n", __LINE__); } } while (0)
+# int ia[64], ib[64], ic[64];
+# float fa[64], fb[64];
+# int main() {
+# 	int n, i;
+# 	for (n = 0; n <= 40; n++) {
+# 		for (i = 0; i < 64; i++) { ib[i] = i * 7 - 3; ia[i] = -99; }
+# 		wmad(ia, ib, 5, n);
+# 		for (i = 0; i < 64; i++) CHECK(ia[i] == (i < n ? ib[i] * 3 + 5 : -99));
+# 	}
+# 	for (n = 0; n <= 40; n++) {
+# 		for (i = 0; i < 64; i++) { ib[i] = i * 3; ic[i] = 1000 - i; ia[i] = -99; }
+# 		wsub(ia, ib, ic, n);
+# 		for (i = 0; i < 64; i++) CHECK(ia[i] == (i < n ? ib[i] - ic[i] : -99));
+# 	}
+# 	for (n = 0; n <= 40; n++) {
+# 		for (i = 0; i < 64; i++) { fb[i] = i * 0.5f; fa[i] = -7.0f; }
+# 		fscale(fa, fb, n);
+# 		for (i = 0; i < 64; i++) CHECK(fa[i] == (i < n ? fb[i] * 2.5f : -7.0f));
+# 	}
+# 	for (n = 0; n <= 40; n++) {
+# 		for (i = 0; i < 64; i++) ia[i] = i - 20;
+# 		winplace(ia, n);
+# 		for (i = 0; i < 64; i++) CHECK(ia[i] == (i < n ? (i - 20) * 3 + 1 : i - 20));
+# 	}
+# 	printf(bad ? "FAILED\n" : "ok\n");
+# 	return bad != 0;
+# }
+# <<<
