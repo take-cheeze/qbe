@@ -369,12 +369,15 @@ static void
 emitcopy(Ref r1, Ref r2, int k, E *e)
 {
 	Ins icp;
+	int w;
 
 	icp.op = Ocopy;
 	icp.arg[0] = r2;
 	icp.to = r1;
 	icp.cls = k;
+	w = wideins;	/* the copy sets wideins for itself: the instruction being emitted keeps its own */
 	emitins(icp, e);
+	wideins = w;
 }
 
 static void
@@ -536,7 +539,9 @@ emitins(Ins i, E *e)
 
 	/* the 256-bit vector ops, and the copies of vectors in a function that has them (its slots are 32 bytes) */
 	wideins = (i.op >= Ovecbcasts256 && i.op <= Ovecdivs256)
-		|| (i.op == Ocopy && i.cls == Kd && e->fn->widevec);
+		|| (i.op == Ocopy && i.cls == Kd && e->fn->widevec
+		    && (isreg(i.to) || rtype(i.to) == RSlot)
+		    && (isreg(i.arg[0]) || rtype(i.arg[0]) == RSlot));
 
 	switch (i.op) {
 	default:
