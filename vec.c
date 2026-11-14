@@ -878,7 +878,7 @@ findloop(Fn *fn, Blk *H, Loop *lp)
 	if (lp->wide && !lp->dbl)
 		lp->vf = 8;
 	/* rv64 (RVV): the same loops, four lanes; any other loop stays out (the rv64 emitter has no SSE forms) */
-	lp->rvv = vecavx && strcmp(T.name, "rv64") == 0 && !st.conv && !lp->anystrd && !(st.hasd && st.hasws);
+	lp->rvv = vecavx && strcmp(T.name, "rv64") == 0 && !st.conv && !(lp->anystrd && st.hasd) && !(st.hasd && st.hasws);
 	if (strcmp(T.name, "rv64") == 0 && !lp->rvv)
 		return rej(__LINE__);
 	lp->nst = st.nst;
@@ -1333,7 +1333,7 @@ build(Fn *fn, Loop *lp)
 
 	/* the identity vector of each reduction, set up at P: 0, or all ones for and */
 	nib = 0;
-	if (lp->anystrd) {
+	if (lp->anystrd && !lp->rvv) {
 		/* the stride-2 stores merge with the old lanes: zero, and the odd lanes' mask (all ones there) */
 		Ref zc, oc, zv, ov1;
 		zc = newtmp("vec", Kw, fn);
@@ -1486,6 +1486,13 @@ build(Fn *fn, Loop *lp)
 			switch (ins->op) {
 			case Oloadsw:
 			case Oload:
+				if (lp->strd[ins->arg[0].val] && lp->rvv) {
+					/* RVV: the even elements of the window, by one strided load */
+					t = newvec(fn);
+					push(Ovecloadst, Kd, t, cloneref(lp, ins->arg[0]), R);
+					lp->map[ins->to.val] = t;
+					continue;
+				}
 				if (lp->strd[ins->arg[0].val]) {
 					/* two vectors, and the even lanes of them: the stride-2 window */
 					Ref a0 = cloneref(lp, ins->arg[0]);
@@ -1516,6 +1523,12 @@ build(Fn *fn, Loop *lp)
 					push(w8 ? Ovecload8 : Ovecload, Kd, old, cloneref(lp, ins->arg[1]), R);
 					nv = lp->guard[k] == 1 ? vsel(fn, lp->cmask, x, old) : vsel(fn, lp->cmask, old, x);
 					push(w8 ? Ovecstore8 : Ovecstore, Kw, R, nv, cloneref(lp, ins->arg[1]));
+					continue;
+				}
+				if (lp->strd[ins->arg[1].val] && lp->rvv) {
+					/* RVV: the value's lanes to the even elements, by one strided store */
+					push(Ovecstorest, Kw, R, req(ins->arg[0], lp->i) ? lp->vi : lp->map[ins->arg[0].val],
+						cloneref(lp, ins->arg[1]));
 					continue;
 				}
 				if (lp->strd[ins->arg[1].val]) {
