@@ -878,7 +878,7 @@ findloop(Fn *fn, Blk *H, Loop *lp)
 	if (lp->wide && !lp->dbl)
 		lp->vf = 8;
 	/* rv64 (RVV): the same loops, four lanes; any other loop stays out (the rv64 emitter has no SSE forms) */
-	lp->rvv = vecavx && strcmp(T.name, "rv64") == 0 && !st.hasd && !st.conv && !lp->anystrd;
+	lp->rvv = vecavx && strcmp(T.name, "rv64") == 0 && !st.conv && !lp->anystrd && !(st.hasd && st.hasws);
 	if (strcmp(T.name, "rv64") == 0 && !lp->rvv)
 		return rej(__LINE__);
 	lp->nst = st.nst;
@@ -1592,7 +1592,7 @@ build(Fn *fn, Loop *lp)
 				for (j=0; j<(uint)nl; j++) {
 					e = newtmp("vec", rc, fn);
 					ad = newtmp("vec", Kl, fn);
-					push(Oadd, Kl, ad, buf, getcon(4*j, fn));
+					push(Oadd, Kl, ad, buf, getcon((rc == Kd ? 8 : 4) * j, fn));
 					push(rc == Kw ? Oloadsw : Oload, rc, e, ad, R);
 					t2 = newtmp("vec", rc, fn);
 					push(lp->redop[k], rc, t2, t, e);

@@ -351,6 +351,21 @@ vecmask(Ins *i, FILE *f)
 	fprintf(f, "\tvmerge.vim v%d, v%d, -1, v0\n", VREG(i->to), VREG(i->to));
 }
 
+/* two doubles per vector: e64 with vl=2 (the element width of the double ops; loads, stores and copies move 16 bytes
+ * either way) */
+static void
+vsetvl64(FILE *f)
+{
+	fputs("\tvsetivli zero, 2, e64, m1, ta, ma\n", f);
+}
+
+static void
+vecmask64(Ins *i, FILE *f)
+{
+	fprintf(f, "\tvmv.v.i v%d, 0\n", VREG(i->to));
+	fprintf(f, "\tvmerge.vim v%d, v%d, -1, v0\n", VREG(i->to), VREG(i->to));
+}
+
 /* a two-source vector op: vd = vop(va, vb) */
 static void
 vecbin(char *mn, Ins *i, FILE *f)
@@ -413,6 +428,41 @@ emitins(Ins *i, Fn *fn, FILE *f)
 		vsetvl(f);
 		fprintf(f, "\tvxor.vi v31, v%d, -1\n", VREG(i->arg[0]));
 		fprintf(f, "\tvand.vv v%d, v31, v%d\n", VREG(i->to), VREG(i->arg[1]));
+		break;
+	case Ovecaddd:
+		vsetvl64(f);
+		fprintf(f, "\tvfadd.vv v%d, v%d, v%d\n", VREG(i->to), VREG(i->arg[0]), VREG(i->arg[1]));
+		break;
+	case Ovecsubd:
+		vsetvl64(f);
+		fprintf(f, "\tvfsub.vv v%d, v%d, v%d\n", VREG(i->to), VREG(i->arg[0]), VREG(i->arg[1]));
+		break;
+	case Ovecmuld:
+		vsetvl64(f);
+		fprintf(f, "\tvfmul.vv v%d, v%d, v%d\n", VREG(i->to), VREG(i->arg[0]), VREG(i->arg[1]));
+		break;
+	case Ovecdivd:
+		vsetvl64(f);
+		fprintf(f, "\tvfdiv.vv v%d, v%d, v%d\n", VREG(i->to), VREG(i->arg[0]), VREG(i->arg[1]));
+		break;
+	case Ovecbcastd:
+		vsetvl64(f);
+		fprintf(f, "\tvfmv.v.f v%d, %s\n", VREG(i->to), rname[i->arg[0].val]);
+		break;
+	case Ovecfeqd:
+		vsetvl64(f);
+		fprintf(f, "\tvmfeq.vv v0, v%d, v%d\n", VREG(i->arg[0]), VREG(i->arg[1]));
+		vecmask64(i, f);
+		break;
+	case Ovecfltd:
+		vsetvl64(f);
+		fprintf(f, "\tvmflt.vv v0, v%d, v%d\n", VREG(i->arg[0]), VREG(i->arg[1]));
+		vecmask64(i, f);
+		break;
+	case Ovecfled:
+		vsetvl64(f);
+		fprintf(f, "\tvmfle.vv v0, v%d, v%d\n", VREG(i->arg[0]), VREG(i->arg[1]));
+		vecmask64(i, f);
 		break;
 	case Ovecaddw:  vecbin("vadd.vv", i, f); break;
 	case Ovecsubw:  vecbin("vsub.vv", i, f); break;

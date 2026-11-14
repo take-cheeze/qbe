@@ -181,6 +181,8 @@ isvecop(int op)
 	case Ovecaddw: case Ovecsubw: case Ovecmulw: case Ovecandw: case Ovecorw: case Ovecxorw:
 	case Ovecadds: case Ovecsubs: case Ovecmuls: case Ovecdivs:
 	case Ovecceqw: case Ovecgtw: case Ovecandn: case Ovecfeqs: case Ovecflts: case Ovecfles:
+	case Ovecaddd: case Ovecsubd: case Ovecmuld: case Ovecdivd: case Ovecbcastd:
+	case Ovecfeqd: case Ovecfltd: case Ovecfled:
 		return 1;
 	}
 	return 0;
