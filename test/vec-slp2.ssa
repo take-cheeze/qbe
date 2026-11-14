@@ -1,0 +1,57 @@
+# Straight-line SLP across two bases (qbe -V): four loads of b, the element-wise arithmetic, four stores to a.
+# The overlap of the two ranges is tested at run time: distinct arrays take the vector block, overlapping ones the
+# scalar block (the loads all read before the stores, as in the original order).
+
+export
+function w $slpx(l %a, l %b) {
+@start
+	%p1 =l add %b, 4
+	%p2 =l add %b, 8
+	%p3 =l add %b, 12
+	%x0 =w loadsw %b
+	%x1 =w loadsw %p1
+	%x2 =w loadsw %p2
+	%x3 =w loadsw %p3
+	%y0 =w xor %x0, 5
+	%y1 =w xor %x1, 5
+	%y2 =w xor %x2, 5
+	%y3 =w xor %x3, 5
+	%z0 =w add %y0, 3
+	%z1 =w add %y1, 3
+	%z2 =w add %y2, 3
+	%z3 =w add %y3, 3
+	storew %z0, %a
+	%q1 =l add %a, 4
+	storew %z1, %q1
+	%q2 =l add %a, 8
+	storew %z2, %q2
+	%q3 =l add %a, 12
+	storew %z3, %q3
+	ret 0
+}
+
+# >>> driver
+# #include <stdio.h>
+# void slpx(int *, int *);
+# int A[64], B[64], C[64];
+# int main() {
+# 	int k, bad = 0, off;
+# 	/* distinct arrays, and b overlapping a at every offset of a few elements */
+# 	for (off = 0; off < 8; off++) {
+# 		for (k = 0; k < 64; k++) { A[k] = -1; B[k] = k * 7 + 1; }
+# 		for (k = 0; k < 4; k++) C[k] = (B[k] ^ 5) + 3;
+# 		slpx(A, B);
+# 		for (k = 0; k < 4; k++) if (A[k] != C[k]) bad++;
+# 		for (k = 4; k < 64; k++) if (A[k] != -1) bad++;
+# 	}
+# 	for (off = -6; off <= 6; off++) {
+# 		int *a = A + 16 + off, *b = A + 16;
+# 		for (k = 0; k < 64; k++) A[k] = k * 3 + 2;
+# 		for (k = 0; k < 4; k++) C[k] = (b[k] ^ 5) + 3;
+# 		slpx(a, b);
+# 		for (k = 0; k < 4; k++) if (a[k] != C[k]) bad++;
+# 	}
+# 	printf(bad ? "FAILED\n" : "ok\n");
+# 	return bad != 0;
+# }
+# <<<

@@ -1951,6 +1951,171 @@ slpsimple(Fn *fn, Blk *b)
 	return 1;
 }
 
+
+/* is t a base of the group (a copy of a value from outside the block, moved to the check block)? */
+static int
+slpisbase(Slp *s, Ref base0, int t)
+{
+	int k;
+
+	if (req(base0, TMP(t)) || (rtype(base0) == RTmp && base0.val == t))
+		return 1;
+	for (k=0; k<s->nld; k++)
+		if (rtype(s->lbase[k]) == RTmp && s->lbase[k].val == t)
+			return 1;
+	return 0;
+}
+
+/* a phi of a successor with block b as a predecessor also has bs and bv: the entry for b becomes bs, and bv gets the same value */
+static void
+slpphi(Blk *sx, Blk *b, Blk *bs, Blk *bv)
+{
+	Phi *p;
+	uint a, n;
+
+	for (p=sx->phi; p; p=p->link) {
+		n = p->narg;
+		for (a=0; a<n; a++)
+			if (p->blk[a] == b) {
+				Ref *na;
+				Blk **nb;
+				uint m;
+
+				na = alloc((p->narg+1) * sizeof na[0]);
+				nb = alloc((p->narg+1) * sizeof nb[0]);
+				for (m=0; m<p->narg; m++) {
+					na[m] = p->arg[m];
+					nb[m] = p->blk[m];
+				}
+				na[p->narg] = p->arg[a];
+				nb[p->narg] = bv;
+				nb[a] = bs;
+				p->arg = na;
+				p->blk = nb;
+				p->narg++;
+				break;	/* the entry for b is now bs; bv was added at the end */
+			}
+	}
+}
+
+/* a store group and loads of another base: the block b tests whether their ranges overlap, and jumps to the scalar
+ * block bs (the original instructions, the overlap case) or to the vector block bv (the tree). The address bases
+ * (copies of values from outside) move to b, which both paths read. */
+static void
+slpsplit(Fn *fn, Slp *s, Blk *b, Ref *vals, int n, int kind, int size, Ref base0, int64_t o0)
+{
+	Ins *orig, *ocopy, *ins, *vb;
+	uint norig, nvb;
+	Blk *bs, *bv, *s1, *s2;
+	int ojt;
+	Ref ojarg, ov = R, v, addr;
+	int k;
+
+	orig = b->ins;	/* read by slpemit (through s->def) until the block's array is replaced */
+	norig = b->nins;
+	ocopy = vnew(norig, sizeof ocopy[0], PFn);
+	memcpy(ocopy, orig, norig * sizeof orig[0]);
+	ojt = b->jmp.type;
+	ojarg = b->jmp.arg;
+	s1 = b->s1;
+	s2 = b->s2;
+	bs = newblk();
+	bv = newblk();
+
+	/* bv: the copies into fixed registers, and the tree. Built first: slpemit reads the group's definitions in
+	 * orig, which the block's array is about to lose. */
+	nib = 0;
+	for (ins=orig; ins<&orig[norig]; ins++)
+		if (rtype(ins->to) == RTmp && ins->to.val < Tmp0)
+			push(ins->op, ins->cls, ins->to, ins->arg[0], ins->arg[1]);
+	v = slpemit(fn, s, vals, n, kind);
+	addr = base0;
+	if (o0) {
+		addr = newtmp("vec", Kl, fn);
+		push(Oadd, Kl, addr, base0, getcon(o0, fn));
+	}
+	push(Ovecstore, Kw, R, v, addr);
+	nvb = nib;
+	vb = vnew(nvb, sizeof vb[0], PFn);
+	memcpy(vb, ib, nvb * sizeof ib[0]);
+	bv->ins = vnew(0, sizeof bv->ins[0], PFn);
+	vgrow(&bv->ins, nvb);
+	memmove(bv->ins, vb, nvb * sizeof vb[0]);
+	bv->nins = nvb;
+	bv->jmp.type = ojt;
+	bv->jmp.arg = ojarg;
+	bv->s1 = s1;
+	bv->s2 = s2;
+
+	/* b: the bases, then the test of every cross-base load region against the store's region */
+	nib = 0;
+	for (ins=ocopy; ins<&ocopy[norig]; ins++)
+		if (rtype(ins->to) == RTmp && slpisbase(s, base0, ins->to.val))
+			push(ins->op, ins->cls, ins->to, ins->arg[0], ins->arg[1]);
+	for (k=0; k<s->nld; k++) {
+		Ref la = base0, lb = s->lbase[k], ha, hb, c1, c2, c;
+
+		if (req(lb, base0))
+			continue;	/* the same base, the store's own region: in place, checked by the caller */
+		if (o0) {
+			la = newtmp("vec", Kl, fn);
+			push(Oadd, Kl, la, base0, getcon(o0, fn));
+		}
+		if (s->loff[k]) {
+			Ref t = newtmp("vec", Kl, fn);
+			push(Oadd, Kl, t, s->lbase[k], getcon(s->loff[k], fn));
+			lb = t;
+		}
+		ha = newtmp("vec", Kl, fn);
+		push(Oadd, Kl, ha, la, getcon((int64_t)n * size, fn));
+		hb = newtmp("vec", Kl, fn);
+		push(Oadd, Kl, hb, lb, getcon((int64_t)n * s->lsz[k], fn));
+		c1 = newtmp("vec", Kw, fn);
+		push(Ocultl, Kw, c1, lb, ha);	/* the load starts before the store ends */
+		c2 = newtmp("vec", Kw, fn);
+		push(Ocultl, Kw, c2, la, hb);	/* the store starts before the load ends */
+		c = newtmp("vec", Kw, fn);
+		push(Oand, Kw, c, c1, c2);
+		if (req(ov, R))
+			ov = c;
+		else {
+			Ref t = newtmp("vec", Kw, fn);
+			push(Oor, Kw, t, ov, c);
+			ov = t;
+		}
+	}
+	vgrow(&b->ins, nib);
+	memmove(b->ins, ib, nib * sizeof ib[0]);
+	b->nins = nib;
+	b->jmp.type = Jjnz;
+	b->jmp.arg = ov;
+	b->s1 = bs;
+	b->s2 = bv;
+
+	/* bs: the original instructions, without the bases (they are in b) */
+	bs->ins = vnew(0, sizeof bs->ins[0], PFn);
+	for (ins=ocopy; ins<&ocopy[norig]; ins++)
+		if (!(rtype(ins->to) == RTmp && slpisbase(s, base0, ins->to.val))) {
+			vgrow(&bs->ins, bs->nins+1);
+			bs->ins[bs->nins++] = *ins;
+		}
+	bs->jmp.type = ojt;
+	bs->jmp.arg = ojarg;
+	bs->s1 = s1;
+	bs->s2 = s2;
+
+	/* the successors: their phis take bs and bv as the predecessors that b was */
+	if (s1)
+		slpphi(s1, b, bs, bv);
+	if (s2 && s2 != s1)
+		slpphi(s2, b, bs, bv);
+
+	/* the block order: b, bs, bv */
+	bv->link = b->link;
+	bs->link = bv;
+	b->link = bs;
+}
+
 /* a block: SLP its one group of VF stores, if there is one */
 static int
 slpblock(Fn *fn, Blk *b)
@@ -2038,8 +2203,17 @@ slpblock(Fn *fn, Blk *b)
 					goto no;	/* the same base at another region: overlap is not tested */
 				inplace = 0;
 			}
-			if (!inplace)
-				goto no;	/* the run-time test is not done yet */
+			if (!inplace) {
+				/* the run-time test: a block with phis is not split (its entries would move) */
+				if (b->phi || kind == LD)
+					goto no;
+				slpsplit(fn, &s, b, vals, n, kind, size, base0, o0);
+				if (vecremarks)
+					fprintf(stderr, "vec: %s: block @%s: SLP with a run-time overlap test, %d stores\n",
+						fn->name, b->name, n);
+				free(s.def);
+				return 1;
+			}
 			/* the block becomes the tree: its values' addresses are rebuilt, its instructions replaced */
 			nib = 0;
 			if (bd)
@@ -2136,6 +2310,8 @@ vec(Fn *fn)
 	for (n=0; n<fn->nblk && !rvv; n++) {
 		filluse(fn);
 		slpblock(fn, fn->rpo[n]);
+		if (debug['W'])
+			printfn(fn, stderr);	/* -d W: the IR after the SLP rewrite */
 	}
 	vfree(ib);
 	ib = 0;
