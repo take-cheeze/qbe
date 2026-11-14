@@ -1999,6 +1999,9 @@ slpblock(Fn *fn, Blk *b)
 			vgrow(&b->ins, nib);
 			memmove(b->ins, ib, nib * sizeof ib[0]);
 			b->nins = nib;
+			if (vecremarks)
+				fprintf(stderr, "vec: %s: block @%s: SLP, %d stores of %d lanes vectorized\n",
+					fn->name, b->name, n, kind == LD ? 2 : 4);
 			free(s.def);
 			return 1;
 		}
