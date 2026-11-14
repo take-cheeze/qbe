@@ -202,8 +202,14 @@ sel(Ins i, Fn *fn)
 		return;
 	}
 	if (isvecop(i.op)) {
-		/* the vector ops (vec.c) have the classes their operands have: nothing to fix */
+		/* the vector ops (vec.c) have the classes their operands have; only an address may be a slot
+		 * (an alloca's), which fixarg turns into its address */
 		emiti(i);
+		i0 = curi;
+		if (i.op == Ovecload)
+			fixarg(&i0->arg[0], Kl, i0, fn);
+		if (i.op == Ovecstore)
+			fixarg(&i0->arg[1], Kl, i0, fn);
 		return;
 	}
 	if (i.op != Onop) {
