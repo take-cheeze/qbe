@@ -307,6 +307,50 @@ fixmem(Ref *pr, Fn *fn, FILE *f)
 	}
 }
 
+/* the vector ops (vec.c, -Y): four e32 lanes in a v register; the vector registers are numbered as the
+ * FP registers (a vector temporary takes an FP number, which is its v number) */
+#define VREG(r) ((r).val - FT0)
+
+static void
+vsetvl(FILE *f)
+{
+	fputs("\tvsetivli zero, 4, e32, m1, ta, ma\n", f);
+}
+
+/* the address of a vector load or store, in a register: a temporary's own, or t6 for a slot or a symbol */
+static char *
+vecaddr(Ref r, Fn *fn, FILE *f)
+{
+	int64_t off;
+
+	switch (rtype(r)) {
+	case RTmp:
+		return rname[r.val];
+	case RSlot:
+		off = slot(r, fn);
+		assert(off >= -2048 && off <= 2047);
+		fprintf(f, "\taddi t6, fp, %d\n", (int)off);
+		return "t6";
+	case RCon:
+		assert(fn->con[r.val].type == CAddr);
+		fputs("\tlla t6, ", f);
+		emitaddr(&fn->con[r.val], f);
+		fputc('\n', f);
+		return "t6";
+	default:
+		die("invalid vector address");
+	}
+	return 0;
+}
+
+/* a two-source vector op: vd = vop(va, vb) */
+static void
+vecbin(char *mn, Ins *i, FILE *f)
+{
+	vsetvl(f);
+	fprintf(f, "\t%s v%d, v%d, v%d\n", mn, VREG(i->to), VREG(i->arg[0]), VREG(i->arg[1]));
+}
+
 static void
 emitins(Ins *i, Fn *fn, FILE *f)
 {
@@ -316,6 +360,32 @@ emitins(Ins *i, Fn *fn, FILE *f)
 	Con *con;
 
 	switch (i->op) {
+	case Ovecload:
+		vsetvl(f);
+		fprintf(f, "\tvle32.v v%d, (%s)\n", VREG(i->to), vecaddr(i->arg[0], fn, f));
+		break;
+	case Ovecstore:
+		vsetvl(f);
+		fprintf(f, "\tvse32.v v%d, (%s)\n", VREG(i->arg[0]), vecaddr(i->arg[1], fn, f));
+		break;
+	case Ovecbcastw:
+		vsetvl(f);
+		fprintf(f, "\tvmv.v.x v%d, %s\n", VREG(i->to), rname[i->arg[0].val]);
+		break;
+	case Ovecbcasts:
+		vsetvl(f);
+		fprintf(f, "\tvfmv.v.f v%d, %s\n", VREG(i->to), rname[i->arg[0].val]);
+		break;
+	case Ovecaddw:  vecbin("vadd.vv", i, f); break;
+	case Ovecsubw:  vecbin("vsub.vv", i, f); break;
+	case Ovecmulw:  vecbin("vmul.vv", i, f); break;
+	case Ovecandw:  vecbin("vand.vv", i, f); break;
+	case Ovecorw:   vecbin("vor.vv", i, f); break;
+	case Ovecxorw:  vecbin("vxor.vv", i, f); break;
+	case Ovecadds:  vecbin("vfadd.vv", i, f); break;
+	case Ovecsubs:  vecbin("vfsub.vv", i, f); break;
+	case Ovecmuls:  vecbin("vfmul.vv", i, f); break;
+	case Ovecdivs:  vecbin("vfdiv.vv", i, f); break;
 	default:
 		if (isload(i->op))
 			fixmem(&i->arg[0], fn, f);
@@ -341,6 +411,12 @@ emitins(Ins *i, Fn *fn, FILE *f)
 	case Ocopy:
 		if (req(i->to, i->arg[0]))
 			break;
+		if (fn->widevec && i->cls == Kd && isreg(i->to) && isreg(i->arg[0])) {
+			/* a copy of an FP register number may be a vector's (its v register, the same number):
+			 * the vector copy too; the FP copy below is the scalar one */
+			vsetvl(f);
+			fprintf(f, "\tvmv.v.v v%d, v%d\n", VREG(i->to), VREG(i->arg[0]));
+		}
 		if (rtype(i->to) == RSlot) {
 			switch (rtype(i->arg[0])) {
 			case RSlot:

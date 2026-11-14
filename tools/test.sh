@@ -75,7 +75,7 @@ init() {
 	rv64)
 		for p in riscv64-linux-musl riscv64-linux-gnu
 		do
-			find_cc_and_qemu riscv64 "$p-gcc -no-pie -static" "qemu-riscv64"
+			find_cc_and_qemu riscv64 "$p-gcc -no-pie -static -march=rv64gcv" "qemu-riscv64"
 		done
 		if test -z "$cc" -o -z "$qemu"
 		then
