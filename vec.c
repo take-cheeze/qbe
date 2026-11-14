@@ -868,11 +868,11 @@ findloop(Fn *fn, Blk *H, Loop *lp)
 	lp->vf = st.hasd ? 2 : 4;
 	/* -Y: 256-bit vectors (8 int32 or float32 lanes) for a loop of element-wise ops only: no double, conversion,
 	 * reduction, condition, mask, stride-2 access, or induction as data (the lane-index buffer is four lanes) */
-	lp->wide = vecavx && wideok() && !st.hasd && !st.conv && !lp->nred && !lp->hascond && !lp->anystrd && !lp->idata;
+	lp->wide = vecavx && wideok() && !st.hasd && !st.conv && !lp->hascond && !lp->anystrd && !lp->idata;
 	if (lp->wide)
 		lp->vf = 8;
 	/* rv64 (RVV): the same loops, four lanes; any other loop stays out (the rv64 emitter has no SSE forms) */
-	lp->rvv = vecavx && strcmp(T.name, "rv64") == 0 && !st.hasd && !st.conv && !lp->nred && !lp->hascond && !lp->anystrd;
+	lp->rvv = vecavx && strcmp(T.name, "rv64") == 0 && !st.hasd && !st.conv && !lp->hascond && !lp->anystrd;
 	if (strcmp(T.name, "rv64") == 0 && !lp->rvv)
 		return rej(__LINE__);
 	lp->nst = st.nst;
@@ -1562,11 +1562,41 @@ build(Fn *fn, Loop *lp)
 	if (nred) {
 		nib = 0;
 		for (k=0; k<(uint)nred; k++) {
-			int rc = lp->redcls[k];
+			int rc = lp->redcls[k], sw = vecw, nl = lp->vf;
+			Ref acc = lp->redva[k];
 			t = lp->redhs[k];
-			for (j=0; j<(uint)lp->vf; j++) {
+			if (lp->rvv) {
+				/* the accumulator to a buffer (one vector store), and its four lanes loaded back as scalars */
+				Ref buf = getbuf(fn), ad;
+				push(Ovecstore, Kw, R, acc, buf);
+				for (j=0; j<(uint)nl; j++) {
+					e = newtmp("vec", rc, fn);
+					ad = newtmp("vec", Kl, fn);
+					push(Oadd, Kl, ad, buf, getcon(4*j, fn));
+					push(rc == Kw ? Oloadsw : Oload, rc, e, ad, R);
+					t2 = newtmp("vec", rc, fn);
+					push(lp->redop[k], rc, t2, t, e);
+					t = t2;
+				}
+				lp->redrd[k] = t;
+				continue;
+			}
+			if (lp->wide) {
+				/* 256 bits to 128: the high half folded into the low one with the reduction's op, then the four
+				 * lanes as for SSE (the folding ops are 128-bit: not wide) */
+				Ref hi, f;
+				vecw = 0;
+				hi = newvec(fn);
+				push(Ovecfold256, Kd, hi, acc, R);
+				f = newvec(fn);
+				push(vecop(lp->redop[k], rc == Kw ? LW : LS), Kd, f, acc, hi);
+				vecw = sw;
+				acc = f;
+				nl = 4;
+			}
+			for (j=0; j<(uint)nl; j++) {
 				e = newtmp("vec", rc, fn);
-				push(rc == Kw ? Ovecext0w + j : rc == Ks ? Ovecext0s + j : Ovecext0d + j, rc, e, lp->redva[k], R);
+				push(rc == Kw ? Ovecext0w + j : rc == Ks ? Ovecext0s + j : Ovecext0d + j, rc, e, acc, R);
 				t2 = newtmp("vec", rc, fn);
 				push(lp->redop[k], rc, t2, t, e);
 				t = t2;

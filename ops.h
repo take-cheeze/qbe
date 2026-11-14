@@ -295,6 +295,7 @@ O(vecadds256, T(e,e,e,d, e,e,e,d), F(0,0,0,1,0,0,0,0,0,0)) X(0,0,0) V(0)  /* vad
 O(vecsubs256, T(e,e,e,d, e,e,e,d), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)  /* vsubps */
 O(vecmuls256, T(e,e,e,d, e,e,e,d), F(0,0,0,1,0,0,0,0,0,0)) X(0,0,0) V(0)  /* vmulps */
 O(vecdivs256, T(e,e,e,d, e,e,e,d), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)  /* vdivps */
+O(vecfold256, T(e,e,e,d, e,e,e,d), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)  /* vextracti128: the high 128 bits of a ymm, as an xmm */
 
 #undef T
 #undef X
