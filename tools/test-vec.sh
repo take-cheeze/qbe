@@ -8,7 +8,7 @@ tmp=`mktemp -d`
 w=$tmp/qbe-V
 printf '#!/bin/sh\nexec "%s/../qbe" -V -F "$@"\n' "`cd "$dir" && pwd`" > "$w"
 chmod +x "$w"
-bin="$w" TARGET=x86_64 sh "$dir/test.sh" "$@"
+bin="$w" TARGET=${TARGET:-x86_64} sh "$dir/test.sh" "$@"
 status=$?
 rm -rf "$tmp"
 exit $status

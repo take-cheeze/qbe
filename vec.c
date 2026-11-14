@@ -1478,7 +1478,10 @@ build(Fn *fn, Loop *lp)
 			kind = ins->cls == Kw ? LW : ins->cls == Ks ? LS : LD;
 			a0 = laneop(fn, lp, ins->arg[0], ins->cls, kind);
 			a1 = laneop(fn, lp, ins->arg[1], ins->cls, kind);
-			if (vecop(ins->op, kind) == -2)
+			if (vecop(ins->op, kind) == -2 && strcmp(T.name, "arm64") == 0) {
+				t = newvec(fn);
+				push(Ovecmulw, Kd, t, a0, a1);	/* NEON has the 32-bit lane multiply */
+			} else if (vecop(ins->op, kind) == -2)
 				t = mulw(fn, a0, a1);
 			else {
 				t = newvec(fn);
@@ -1608,7 +1611,7 @@ vec(Fn *fn)
 	uint n, nc, k;
 	Loop lp;
 
-	if (strcmp(T.name, "amd64_sysv") != 0 || nofp)
+	if ((strcmp(T.name, "amd64_sysv") != 0 && strcmp(T.name, "arm64") != 0) || nofp)
 		return;
 	ib = vnew(0, sizeof ib[0], PHeap);
 	nib = 0;
