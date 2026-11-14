@@ -520,6 +520,12 @@ Emit:
 	case Ovecceqw:
 	case Ovecgtw:
 	case Ovecandn:
+	case Ovecfeqs:
+	case Ovecflts:
+	case Ovecfles:
+	case Ovecfeqd:
+	case Ovecfltd:
+	case Ovecfled:
 		goto Emit;
 	case Ovecmuludq:
 	case Ovecsrlq32:

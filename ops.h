@@ -265,6 +265,12 @@ O(vecunpckhpd, T(e,e,e,d, e,e,e,d), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0) /* unp
 O(vecceqw, T(e,e,e,d, e,e,e,d), F(0,0,0,1,0,0,0,0,0,0)) X(0,0,0) V(0)   /* pcmpeqd: a lane is all ones where equal */
 O(vecgtw, T(e,e,e,d, e,e,e,d), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)   /* pcmpgtd: a lane is all ones where signed greater */
 O(vecandn, T(e,e,e,d, e,e,e,d), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)  /* pandn: ~a & b */
+O(vecfeqs, T(e,e,e,d, e,e,e,d), F(0,0,0,1,0,0,0,0,0,0)) X(0,0,0) V(0)   /* cmpps eq: lanes all ones where equal (ordered) */
+O(vecflts, T(e,e,e,d, e,e,e,d), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)   /* cmpps lt */
+O(vecfles, T(e,e,e,d, e,e,e,d), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)   /* cmpps le */
+O(vecfeqd, T(e,e,e,d, e,e,e,d), F(0,0,0,1,0,0,0,0,0,0)) X(0,0,0) V(0)   /* cmppd eq */
+O(vecfltd, T(e,e,e,d, e,e,e,d), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)   /* cmppd lt */
+O(vecfled, T(e,e,e,d, e,e,e,d), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)   /* cmppd le */
 O(vecmuludq, T(e,e,e,d, e,e,e,d), F(0,0,0,1,0,0,0,0,0,0)) X(0,0,0) V(0)   /* pmuludq: the products of the even lanes, 64-bit */
 O(vecsrlq32, T(e,e,e,d, e,e,e,e), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)   /* psrlq 32: each 64-bit lane shifted down */
 O(vecpack02, T(e,e,e,d, e,e,e,e), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)   /* pshufd 0x88: lanes 0 and 2 to the low half */
