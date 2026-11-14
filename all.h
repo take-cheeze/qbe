@@ -351,6 +351,7 @@ struct Tmp {
 	uint ndef, nuse;
 	uint bid; /* id of a defining block */
 	uint cost;
+	uint nlive; /* blocks the temporary is live into (spill priority: cost per block) */
 	int slot; /* -1 for unset */
 	short cls;
 	struct {
