@@ -1,0 +1,56 @@
+export
+function w $multi(l %a, l %b, w %n, w %x0, w %y0, w %z0) {
+@start
+@head
+	%i =w phi @start 0, @latch %i2
+	%xs =w phi @start %x0, @latch %xs2
+	%ys =w phi @start %y0, @latch %ys2
+	%zs =w phi @start %z0, @latch %zs2
+	%c =w csltw %i, %n
+	jnz %c, @body, @done
+@body
+	%t =l extsw %i
+	%o =l mul %t, 4
+	%pa =l add %a, %o
+	%pb =l add %b, %o
+	%u =w loadsw %pa
+	%v =w loadsw %pb
+	%xs2 =w xor %xs, %u
+	%ys2 =w and %ys, %u
+	%zs2 =w or %zs, %v
+	%w =w add %u, 1
+	storew %w, %pb
+	jmp @latch
+@latch
+	%i2 =w add %i, 1
+	jmp @head
+@done
+	%r1 =w add %xs, %ys
+	%r2 =w add %r1, %zs
+	ret %r2
+}
+# >>> driver
+# #include <stdio.h>
+# int multi(long *, long *, int, int, int, int);
+# int A[64], B[64];
+# int main() {
+# 	int n, i, bad = 0;
+# 	for (n = 0; n <= 40; n++) {
+# 		unsigned int xr = 12345u, yr = (unsigned)-1, zr = 7u;
+# 		int Bo[64], Bw[64], k, got, want;
+# 		for (i = 0; i < 64; i++) { A[i] = i * 13 - 200; B[i] = i * 5 + 3; Bo[i] = B[i]; Bw[i] = B[i]; }
+# 		for (k = 0; k < n; k++) {
+# 			xr ^= (unsigned)A[k];
+# 			yr &= (unsigned)A[k];
+# 			zr |= (unsigned)Bo[k];
+# 			Bw[k] = A[k] + 1;
+# 		}
+# 		want = (int)(xr + yr + zr);
+# 		got = multi((long *)A, (long *)B, n, 12345, -1, 7);
+# 		for (i = 0; i < 64; i++) if (B[i] != Bw[i]) bad++;
+# 		if (got != want) { bad++; printf("n=%d got=%d want=%d\n", n, got, want); }
+# 	}
+# 	printf("bad=%d\n", bad);
+# 	return bad != 0;
+# }
+# <<<

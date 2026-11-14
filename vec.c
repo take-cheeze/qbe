@@ -7,13 +7,17 @@
  *	     jmp H                            (P -> Chk -> Hv when the loop stores to an array)
  *	Chk: ov = overlap of the stored arrays with the others; jnz ov, H, Hv
  *	Hv:  iv = phi(P: i0, Bv: ivn)         the vector header: runs while i + VF <= n
+ *	     va = phi(P: vid, Bv: van)        one vector accumulator per reduction
  *	     tt = add iv, VF
  *	     cc = cslew tt, n
- *	     jnz cc, Bv, H
+ *	     jnz cc, Bv, H or Rd
  *	Bv:  the body on lanes iv .. iv+VF-1
  *	     ivn = add iv, VF
  *	     jmp Hv
- *	H:   i = phi(.. Hv: iv ..)            the scalar loop, unchanged: it runs the rest
+ *	Rd:  the lanes of each accumulator are folded into the scalar one, the value of
+ *	     the scalar loop's entry (only with reductions)
+ *	     jmp H
+ *	H:   i = phi(.. ..), acc = phi(.. Rd: the folded value ..)   the scalar loop, unchanged
  *	     c = csltw i, n
  *	     jnz c, B, E
  *	B:   ... the scalar body ...
@@ -21,8 +25,10 @@
  *	     jmp H
  *
  * Recognized loops (anything else is left alone):
- *   - H: one phi i (class w, the only phi), one instruction c = csltw i, n with n a
+ *   - H: the induction phi i (class w), one instruction c = csltw i, n with n a
  *     temporary of class w defined outside the loop, or a constant; jnz c, B, E.
+ *   - Other phis of H are integer reductions (at most NRED): acc = phi(P: init, L: acc2)
+ *     with acc2 = op acc, lane, op one of add, and, or, xor, lane a w lane of the loop.
  *   - H has two predecessors: P outside the loop, and the latch L.
  *   - B up to L is a chain of blocks, each with one predecessor, no phi, and a jmp; L jumps to H.
  *   - Body instructions are one of:
@@ -33,10 +39,11 @@
  *       w add, sub, and, or, xor, or s or d add, sub, mul, div on vector lanes, invariant
  *       scalars (broadcast) and constants, with at least one lane operand;
  *       a store of a lane of the same width at such an address;
- *       the latch i2 = add i, 1.
+ *       the latch i2 = add i, 1, and the reductions' latch values.
  *   - No other instruction, phi, call, or memory access. A value defined in the body is
  *     used only in the body (the latch aside: H's phi uses it).
  *   - All lanes of a loop have one width: 2 for doubles, else 4; w/s with d is refused.
+ *     Reductions need the 4 w lanes.
  *   - An array (base) accessed with two different element sizes is refused.
  *   - When the loop stores and touches more than one base, Chk tests at run time that the
  *     index range [base, base + n*size) of each stored base does not overlap any other base's
@@ -57,14 +64,17 @@ enum {
 	LD,	/* 2 x double */
 };
 
-enum { NBREF = 8 };	/* the distinct bases of a loop */
+enum {
+	NBREF = 8,	/* the distinct bases of a loop */
+	NRED = 4,	/* the reductions of a loop */
+};
 
 typedef struct Loop Loop;
 struct Loop {
 	Blk *H, *P, *L;
 	Blk *body[17];
 	uint nbody;
-	Phi *ph;
+	Phi *ph;	/* the induction phi */
 	int ia;		/* index in ph of the value from P; 1 - ia is the latch's */
 	Ref i;		/* the induction temporary (ph->to) */
 	Ref lat;	/* the latch value i2 */
@@ -85,6 +95,19 @@ struct Loop {
 	Ref bref[NBREF];
 	int bsz[NBREF];	/* per base: the element size */
 	int bst[NBREF];	/* per base: stored to */
+	/* reductions: the phis of H besides i */
+	int nred;
+	Phi *redph[NRED];
+	Ref redinit[NRED];	/* the entry from P */
+	Ref redlat[NRED];	/* the latch value */
+	int redop[NRED];	/* Oadd, Oand, Oor or Oxor */
+	int redseen[NRED];	/* the latch value was found in the body */
+	int *redof;		/* per temporary: k+1 for the accumulator of reduction k, -(k+1) for its latch */
+	Ref redvi[NRED];	/* build: the identity vector, the entry of the vector accumulator */
+	Ref redva[NRED];	/* build: the vector accumulator (Hv's phi) */
+	Ref redvn[NRED];	/* build: its next value (Bv) */
+	Ref redhs[NRED];	/* build: the scalar accumulator (Hv's phi), the entry's init */
+	Ref redrd[NRED];	/* build: the folded scalar value (Rd) */
 };
 
 struct Stats {
@@ -291,6 +314,23 @@ classify(Fn *fn, Loop *lp, Ins *ins, struct Stats *st)
 		lp->dch[tn] = 1;
 		return 1;
 	}
+	/* the latch value of a reduction: acc2 = op acc, lane */
+	if (tn >= 0 && lp->redof[tn] < 0) {
+		k = -lp->redof[tn] - 1;
+		if (ins->cls != Kw || (ins->op != Oadd && ins->op != Oand && ins->op != Oor && ins->op != Oxor))
+			return 0;
+		if (req(a0, lp->redph[k]->to) && rtype(a1) == RTmp && lp->lane[a1.val] == LW)
+			;
+		else if (req(a1, lp->redph[k]->to) && rtype(a0) == RTmp && lp->lane[a0.val] == LW)
+			;
+		else
+			return 0;
+		lp->redop[k] = ins->op;
+		lp->redseen[k] = 1;
+		st->nvec++;
+		st->hasws = 1;
+		return 1;
+	}
 	/* arithmetic on lanes */
 	k = ins->cls;
 	kind = k == Kw ? LW : k == Ks ? LS : k == Kd ? LD : LNone;
@@ -324,27 +364,31 @@ static int
 findloop(Fn *fn, Blk *H, Loop *lp)
 {
 	Blk *B, *L, *P, *b;
-	Phi *ph;
+	Phi *ph, *p;
 	Ins *cmp, *ins;
 	struct Stats st;
 	uint k, t, nt, nb, j;
-	int ia, found;
+	int ia, found, nr;
 	Use *u;
 
 	memset(&st, 0, sizeof st);
 	if (H->jmp.type != Jjnz || H->s1 == H || H->s2 == H || H->npred != 2 || H->nins != 1 || !H->phi)
 		return rej(__LINE__);
-	ph = H->phi;
-	if (ph->link || ph->narg != 2 || ph->cls != Kw)
-		return rej(__LINE__);
 	cmp = &H->ins[0];
-	if (cmp->op != Ocsltw || cmp->cls != Kw || !req(H->jmp.arg, cmp->to) || !req(cmp->arg[0], ph->to))
+	if (cmp->op != Ocsltw || cmp->cls != Kw || !req(H->jmp.arg, cmp->to))
 		return rej(__LINE__);
 	if (fn->tmp[cmp->to.val].nuse != 1)
 		return rej(__LINE__);
 	if (rtype(cmp->arg[1]) == RCon && fn->con[cmp->arg[1].val].type != CBits)
 		return rej(__LINE__);
 	if (rtype(cmp->arg[1]) != RTmp && rtype(cmp->arg[1]) != RCon)
+		return rej(__LINE__);
+	/* the induction phi: the one the comparison tests */
+	ph = 0;
+	for (p=H->phi; p; p=p->link)
+		if (req(p->to, cmp->arg[0]))
+			ph = p;
+	if (!ph || ph->narg != 2 || ph->cls != Kw)
 		return rej(__LINE__);
 
 	/* the body chain: one predecessor each, no phi, a jmp; the last one jumps back to H */
@@ -398,20 +442,46 @@ findloop(Fn *fn, Blk *H, Loop *lp)
 	lp->base = emalloc(nt * sizeof lp->base[0]);
 	lp->inb = emalloc(nb);
 	lp->map = emalloc(nt * sizeof lp->map[0]);
+	lp->redof = emalloc(nt * sizeof lp->redof[0]);
+
+	/* the reductions: the other phis of H, each with an entry from P and one from L */
+	nr = 0;
+	for (p=H->phi; p; p=p->link) {
+		if (p == ph)
+			continue;
+		if (p->narg != 2 || p->cls != Kw || nr == NRED)
+			return rej(__LINE__);
+		if (!((p->blk[0] == P && p->blk[1] == L) || (p->blk[0] == L && p->blk[1] == P)))
+			return rej(__LINE__);
+		lp->redph[nr] = p;
+		lp->redinit[nr] = p->blk[0] == P ? p->arg[0] : p->arg[1];
+		lp->redlat[nr] = p->blk[0] == L ? p->arg[0] : p->arg[1];
+		if (rtype(lp->redlat[nr]) != RTmp)
+			return rej(__LINE__);
+		nr++;
+	}
+	lp->nred = nr;
 
 	for (k=0; k<lp->nbody; k++)
 		lp->inb[lp->body[k]->id] = 1;
 	lp->inb[H->id] = 1;
 
-	lp->inl[lp->i.val] = 1;
 	lp->inl[cmp->to.val] = 1;
 	lp->idx[lp->i.val] = 1;
 	lp->step[lp->i.val] = 1;
+	for (p=H->phi; p; p=p->link)
+		lp->inl[p->to.val] = 1;
 	for (k=0; k<lp->nbody; k++) {
 		b = lp->body[k];
 		for (ins=b->ins; ins<&b->ins[b->nins]; ins++)
 			if (rtype(ins->to) == RTmp)
 				lp->inl[ins->to.val] = 1;
+	}
+	/* a reduction's accumulator, and its latch value */
+	for (k=0; k<(uint)nr; k++) {
+		lp->redof[lp->redph[k]->to.val] = k+1;
+		lp->redof[lp->redlat[k].val] = -(int)(k+1);
+		lp->redseen[k] = 0;
 	}
 	/* the bound is loop-invariant: the vector header tests it */
 	if (rtype(lp->n) == RTmp && (lp->inl[lp->n.val] || fn->tmp[lp->n.val].cls != Kw))
@@ -436,8 +506,13 @@ findloop(Fn *fn, Blk *H, Loop *lp)
 	}
 	if (!found || st.nvec == 0 || st.nld + st.nst == 0)
 		return rej(__LINE__);
+	for (k=0; k<(uint)nr; k++)
+		if (!lp->redseen[k])
+			return rej(__LINE__);
 	if (st.hasd && st.hasws)
 		return rej(__LINE__);
+	if (nr > 0 && st.hasd)
+		return rej(__LINE__);	/* reductions fold four w lanes */
 	lp->vf = st.hasd ? 2 : 4;
 	lp->nst = st.nst;
 
@@ -471,6 +546,27 @@ newvec(Fn *fn)
 	v = newtmp("vec", Kd, fn);
 	fn->tmp[v.val].vec = 1;
 	return v;
+}
+
+/* a phi of two entries */
+static Phi *
+mkphi(Ref to, int cls, Blk *b0, Ref a0, Blk *b1, Ref a1)
+{
+	Phi *p;
+
+	p = alloc(sizeof *p);
+	p->to = to;
+	p->cls = cls;
+	p->narg = 2;
+	p->visit = 0;
+	p->link = 0;
+	p->arg = vnew(2, sizeof p->arg[0], PFn);
+	p->blk = vnew(2, sizeof p->blk[0], PFn);
+	p->arg[0] = a0;
+	p->blk[0] = b0;
+	p->arg[1] = a1;
+	p->blk[1] = b1;
+	return p;
 }
 
 /* an address or index operand: the vector loop's clone of it, or the operand itself */
@@ -558,30 +654,54 @@ overlaps(Fn *fn, Loop *lp)
 static void
 build(Fn *fn, Loop *lp)
 {
-	Blk *Hv, *Bv, *Chk, *P, *H, *b;
-	Phi *ph, *hp;
-	Ref iv, ivn, tt, cc, init, t, a0, a1, ov;
+	Blk *Hv, *Bv, *Chk, *Rd, *P, *H, *b, *X;
+	Phi *ph, *p, *hp, *vp, *sp;
+	Ref iv, ivn, tt, cc, init, t, t2, e, c, a0, a1, ov, val;
 	Ins *ins;
-	uint k;
-	int a, kind, check;
+	uint k, j;
+	int a, kind, check, nred, rk;
 
 	H = lp->H;
 	P = lp->P;
 	ph = lp->ph;
+	nred = lp->nred;
 	/* a test is needed when the loop stores and touches some other base too */
 	check = lp->nst > 0 && lp->nbref > 1;
 
 	Hv = newblk();
 	Bv = newblk();
 	Chk = check ? newblk() : 0;
+	Rd = nred ? newblk() : 0;
 	iv = newtmp("vec", Kw, fn);
 	ivn = newtmp("vec", Kw, fn);
 	tt = newtmp("vec", Kw, fn);
 	cc = newtmp("vec", Kw, fn);
 	init = ph->arg[lp->ia];
 
-	/* block order: P, [Chk,] Hv, Bv, then the rest */
+	/* the identity vector of each reduction, set up at P: 0, or all ones for and */
+	nib = 0;
+	for (k=0; k<(uint)nred; k++) {
+		c = newtmp("vec", Kw, fn);
+		push(Ocopy, Kw, c, getcon(lp->redop[k] == Oand ? -1 : 0, fn), R);
+		lp->redvi[k] = newvec(fn);
+		push(Ovecbcastw, Kd, lp->redvi[k], c, R);
+		lp->redva[k] = newvec(fn);
+		lp->redhs[k] = newtmp("vec", Kw, fn);
+		lp->redvn[k] = R;
+		lp->redrd[k] = R;
+	}
+	if (nib) {
+		vgrow(&P->ins, P->nins + nib);
+		memmove(P->ins + P->nins, ib, nib * sizeof ib[0]);
+		P->nins += nib;
+	}
+
+	/* block order: P, [Chk,] Hv, Bv, [Rd], then the rest */
 	Bv->link = P->link;
+	if (nred) {
+		Rd->link = Bv->link;
+		Bv->link = Rd;
+	}
 	Hv->link = Bv;
 	if (check) {
 		Chk->link = Hv;
@@ -589,65 +709,11 @@ build(Fn *fn, Loop *lp)
 	} else
 		P->link = Hv;
 
-	/* H's phi: the entry from P now comes from Chk (or Hv); the vector loop's exit comes from Hv */
-	for (a=0; a<2; a++)
-		if (ph->blk[a] == P)
-			ph->blk[a] = check ? Chk : Hv;
-	if (!check) {
-		for (a=0; a<2; a++)
-			if (ph->blk[a] == Hv)
-				ph->arg[a] = iv;
-	} else {
-		vgrow(&ph->arg, 3);
-		vgrow(&ph->blk, 3);
-		ph->arg[2] = iv;
-		ph->blk[2] = Hv;
-		ph->narg = 3;
-	}
-
-	/* Hv: iv = phi(P or Chk: init, Bv: ivn) */
-	hp = alloc(sizeof *hp);
-	hp->to = iv;
-	hp->cls = Kw;
-	hp->narg = 2;
-	hp->visit = 0;
-	hp->link = 0;
-	hp->arg = vnew(2, sizeof hp->arg[0], PFn);
-	hp->blk = vnew(2, sizeof hp->blk[0], PFn);
-	hp->arg[0] = init;
-	hp->blk[0] = check ? Chk : P;
-	hp->arg[1] = ivn;
-	hp->blk[1] = Bv;
-	Hv->phi = hp;
-
-	if (P->s1 == H)
-		P->s1 = check ? Chk : Hv;
-	if (P->s2 == H)
-		P->s2 = check ? Chk : Hv;
-
-	if (check) {
-		nib = 0;
-		ov = overlaps(fn, lp);
-		idup(Chk, ib, nib);
-		Chk->jmp.type = Jjnz;
-		Chk->jmp.arg = ov;
-		Chk->s1 = H;
-		Chk->s2 = Hv;
-	}
-
-	/* Hv: tt = iv + VF; cc = tt <= n; jnz cc, Bv, H */
-	nib = 0;
-	push(Oadd, Kw, tt, iv, getcon(lp->vf, fn));
-	push(Ocslew, Kw, cc, tt, lp->n);
-	idup(Hv, ib, nib);
-	Hv->jmp.type = Jjnz;
-	Hv->jmp.arg = cc;
-	Hv->s1 = Bv;
-	Hv->s2 = H;
-
-	/* Bv: the body on the lanes */
+	/* the body, on the lanes: Bv */
 	memset(lp->map, 0, lp->nt * sizeof lp->map[0]);
 	lp->map[lp->i.val] = iv;
+	for (k=0; k<(uint)nred; k++)
+		lp->map[lp->redph[k]->to.val] = lp->redva[k];
 	nib = 0;
 	for (k=0; k<lp->nbody; k++) {
 		b = lp->body[k];
@@ -656,6 +722,16 @@ build(Fn *fn, Loop *lp)
 				continue;
 			if (ins->op == Oadd && ins->cls == Kw && req(ins->to, lp->lat))
 				continue;
+			/* a reduction's latch: the vector accumulator, folded with its lane */
+			if (rtype(ins->to) == RTmp && lp->redof[ins->to.val] < 0) {
+				rk = -lp->redof[ins->to.val] - 1;
+				Ref other = req(ins->arg[0], lp->redph[rk]->to) ? ins->arg[1] : ins->arg[0];
+				a1 = laneop(fn, lp, other, Kw, LW);
+				t = newvec(fn);
+				push(vecop(ins->op, LW), Kd, t, lp->redva[rk], a1);
+				lp->redvn[rk] = t;
+				continue;
+			}
 			/* index and address arithmetic: cloned on iv */
 			if (rtype(ins->to) == RTmp && (lp->idx[ins->to.val] || lp->adr[ins->to.val])) {
 				t = newtmp("vec", ins->cls, fn);
@@ -692,6 +768,95 @@ build(Fn *fn, Loop *lp)
 	Bv->jmp.type = Jjmp;
 	Bv->s1 = Hv;
 	Bv->s2 = 0;
+
+	/* Rd: the lanes of each accumulator folded into its scalar one, then to H */
+	if (nred) {
+		nib = 0;
+		for (k=0; k<(uint)nred; k++) {
+			t = lp->redhs[k];
+			for (j=0; j<4; j++) {
+				e = newtmp("vec", Kw, fn);
+				push(Ovecext0w + j, Kw, e, lp->redva[k], R);
+				t2 = newtmp("vec", Kw, fn);
+				push(lp->redop[k], Kw, t2, t, e);
+				t = t2;
+			}
+			lp->redrd[k] = t;
+		}
+		idup(Rd, ib, nib);
+		Rd->jmp.type = Jjmp;
+		Rd->s1 = H;
+		Rd->s2 = 0;
+	}
+
+	/* the exit of the vector loop: Rd when there are reductions, else H */
+	X = nred ? Rd : Hv;
+
+	/* H's phis: the entry from P now comes from Chk (or X); the vector loop's exit from X */
+	for (p=H->phi; p; p=p->link) {
+		if (p == ph)
+			val = iv;
+		else {
+			rk = 0;
+			while (lp->redph[rk] != p)
+				rk++;
+			val = lp->redrd[rk];
+		}
+		if (!check) {
+			for (a=0; a<2; a++)
+				if (p->blk[a] == P) {
+					p->blk[a] = X;
+					p->arg[a] = val;
+				}
+		} else {
+			for (a=0; a<2; a++)
+				if (p->blk[a] == P)
+					p->blk[a] = Chk;
+			vgrow(&p->arg, 3);
+			vgrow(&p->blk, 3);
+			p->arg[2] = val;
+			p->blk[2] = X;
+			p->narg = 3;
+		}
+	}
+
+	/* Hv: iv = phi(P or Chk: init, Bv: ivn); the accumulators */
+	hp = mkphi(iv, Kw, check ? Chk : P, init, Bv, ivn);
+	Hv->phi = hp;
+	for (k=0; k<(uint)nred; k++) {
+		vp = mkphi(lp->redva[k], Kd, check ? Chk : P, lp->redvi[k], Bv, lp->redvn[k]);
+		sp = mkphi(lp->redhs[k], Kw, check ? Chk : P, lp->redinit[k], Bv, lp->redhs[k]);
+		hp->link = vp;
+		vp->link = sp;
+		hp = sp;
+	}
+
+	if (P->s1 == H)
+		P->s1 = check ? Chk : Hv;
+	if (P->s2 == H)
+		P->s2 = check ? Chk : Hv;
+
+	if (check) {
+		nib = 0;
+		ov = overlaps(fn, lp);
+		idup(Chk, ib, nib);
+		Chk->jmp.type = Jjnz;
+		Chk->jmp.arg = ov;
+		Chk->s1 = H;
+		Chk->s2 = Hv;
+	}
+
+	/* Hv: tt = iv + VF; cc = tt <= n; jnz cc, Bv, X */
+	nib = 0;
+	push(Oadd, Kw, tt, iv, getcon(lp->vf, fn));
+	push(Ocslew, Kw, cc, tt, lp->n);
+	idup(Hv, ib, nib);
+	Hv->jmp.type = Jjnz;
+	Hv->jmp.arg = cc;
+	Hv->s1 = Bv;
+	Hv->s2 = nred ? Rd : H;
+	(void)rk;
+	(void)j;
 }
 
 void
@@ -720,8 +885,8 @@ vec(Fn *fn)
 		memset(&lp, 0, sizeof lp);
 		if (findloop(fn, cand[k], &lp)) {
 			if (debug['V'])
-				fprintf(stderr, "vec: %s: loop at @%d, %d lanes, %d bases\n", fn->name,
-					cand[k]->id, lp.vf, lp.nbref);
+				fprintf(stderr, "vec: %s: loop at @%d, %d lanes, %d bases, %d reductions\n", fn->name,
+					cand[k]->id, lp.vf, lp.nbref, lp.nred);
 			build(fn, &lp);
 			fillcfg(fn);
 			filluse(fn);
@@ -737,6 +902,7 @@ vec(Fn *fn)
 		free(lp.base);
 		free(lp.inb);
 		free(lp.map);
+		free(lp.redof);
 	}
 	vfree(ib);
 	ib = 0;
