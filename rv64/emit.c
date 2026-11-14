@@ -429,6 +429,16 @@ emitins(Ins *i, Fn *fn, FILE *f)
 		fprintf(f, "\tvxor.vi v31, v%d, -1\n", VREG(i->arg[0]));
 		fprintf(f, "\tvand.vv v%d, v31, v%d\n", VREG(i->to), VREG(i->arg[1]));
 		break;
+	case Ovecloadst:	/* the even elements: an 8-byte stride from the address (t6 holds the stride) */
+		vsetvl(f);
+		fprintf(f, "\tli t6, 8\n");
+		fprintf(f, "\tvlse32.v v%d, (%s), t6\n", VREG(i->to), rname[i->arg[0].val]);
+		break;
+	case Ovecstorest:
+		vsetvl(f);
+		fprintf(f, "\tli t6, 8\n");
+		fprintf(f, "\tvsse32.v v%d, (%s), t6\n", VREG(i->arg[0]), rname[i->arg[1].val]);
+		break;
 	case Ovecaddd:
 		vsetvl64(f);
 		fprintf(f, "\tvfadd.vv v%d, v%d, v%d\n", VREG(i->to), VREG(i->arg[0]), VREG(i->arg[1]));
