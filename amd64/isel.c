@@ -506,6 +506,12 @@ Emit:
 	case Ovecext1w:
 	case Ovecext2w:
 	case Ovecext3w:
+	case Ovecext0s:
+	case Ovecext1s:
+	case Ovecext2s:
+	case Ovecext3s:
+	case Ovecext0d:
+	case Ovecext1d:
 		goto Emit;
 	case Ovecmuludq:
 	case Ovecsrlq32:
