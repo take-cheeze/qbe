@@ -136,7 +136,14 @@ slot(int t)
 		 *
 		 * invariant: slot4 <= slot8
 		 */
-		if (KWIDE(tmp[t].cls)) {
+		if (tmp[t].cls == Kd) {
+			/* 16 bytes for every double: a vector (vec.c) is spilled whole, and an xmm copy of a
+			 * slot moves 16 bytes (amd64 emit); a scalar double uses the first 8 */
+			s = slot8;
+			if (slot4 == slot8)
+				slot4 += 4;
+			slot8 += 4;
+		} else if (KWIDE(tmp[t].cls)) {
 			s = slot8;
 			if (slot4 == slot8)
 				slot4 += 2;
@@ -232,14 +239,18 @@ reloads(BSet *u, BSet *v)
 
 	for (t=Tmp0; bsiter(u, &t); t++)
 		if (!bshas(v, t))
-			emit(Oload, tmp[t].cls, TMP(t), slot(t), R);
+			emit(tmp[t].vec ? Ovecload : Oload, tmp[t].cls, TMP(t), slot(t), R);
 }
 
 static void
 store(Ref r, int s)
 {
-	if (s != -1)
-		emit(Ostorew + tmp[r.val].cls, 0, R, r, SLOT(s));
+	if (s != -1) {
+		if (tmp[r.val].vec)
+			emit(Ovecstore, Kw, R, r, SLOT(s));
+		else
+			emit(Ostorew + tmp[r.val].cls, 0, R, r, SLOT(s));
+	}
 }
 
 static int

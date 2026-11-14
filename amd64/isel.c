@@ -479,6 +479,29 @@ Emit:
 	case Oalloc16:
 		salloc(i.to, i.arg[0], fn);
 		break;
+	case Ovecload:
+		seladdr(&i.arg[0], tn, fn);
+		goto Emit;
+	case Ovecstore:
+		seladdr(&i.arg[1], tn, fn);
+		goto Emit;
+	case Ovecbcastw:
+	case Ovecbcasts:
+	case Ovecbcastd:
+	case Ovecaddw:
+	case Ovecsubw:
+	case Ovecandw:
+	case Ovecorw:
+	case Ovecxorw:
+	case Ovecadds:
+	case Ovecsubs:
+	case Ovecmuls:
+	case Ovecdivs:
+	case Ovecaddd:
+	case Ovecsubd:
+	case Ovecmuld:
+	case Ovecdivd:
+		goto Emit;
 	default:
 		if (isext(i.op))
 			goto case_Oext;

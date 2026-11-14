@@ -226,6 +226,28 @@ O(xselfne,  T(e,e,s,d, e,e,s,d), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)
 O(xselfo,   T(e,e,s,d, e,e,s,d), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)
 O(xselfuo,  T(e,e,s,d, e,e,s,d), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)
 
+/* Vectors (vec.c, amd64 SSE): a vector value is a temporary of class Kd with Tmp.vec set, held in an
+   xmm register. The lane type is in the op name: w = 4 x int32, s = 4 x float, d = 2 x double.
+   vecload/vecstore move 16 bytes; the store's class is Kw (as for the scalar stores). */
+O(vecload,   T(e,e,e,m, e,e,e,e), F(0,0,0,0,0,0,0,0,0,1)) X(0,0,1) V(0)
+O(vecstore,  T(d,e,e,e, m,e,e,e), F(0,0,0,0,0,0,0,0,0,1)) X(0,0,1) V(0)
+O(vecbcastw, T(e,e,e,d, e,e,e,w), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)
+O(vecbcasts, T(e,e,e,d, e,e,e,s), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)
+O(vecbcastd, T(e,e,e,d, e,e,e,d), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)
+O(vecaddw,   T(e,e,e,d, e,e,e,d), F(0,0,0,1,0,0,0,0,0,0)) X(0,0,0) V(0)
+O(vecsubw,   T(e,e,e,d, e,e,e,d), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)
+O(vecandw,   T(e,e,e,d, e,e,e,d), F(0,0,0,1,0,0,0,0,0,0)) X(0,0,0) V(0)
+O(vecorw,    T(e,e,e,d, e,e,e,d), F(0,0,0,1,0,0,0,0,0,0)) X(0,0,0) V(0)
+O(vecxorw,   T(e,e,e,d, e,e,e,d), F(0,0,0,1,0,0,0,0,0,0)) X(0,0,0) V(0)
+O(vecadds,   T(e,e,e,d, e,e,e,d), F(0,0,0,1,0,0,0,0,0,0)) X(0,0,0) V(0)
+O(vecsubs,   T(e,e,e,d, e,e,e,d), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)
+O(vecmuls,   T(e,e,e,d, e,e,e,d), F(0,0,0,1,0,0,0,0,0,0)) X(0,0,0) V(0)
+O(vecdivs,   T(e,e,e,d, e,e,e,d), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)
+O(vecaddd,   T(e,e,e,d, e,e,e,d), F(0,0,0,1,0,0,0,0,0,0)) X(0,0,0) V(0)
+O(vecsubd,   T(e,e,e,d, e,e,e,d), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)
+O(vecmuld,   T(e,e,e,d, e,e,e,d), F(0,0,0,1,0,0,0,0,0,0)) X(0,0,0) V(0)
+O(vecdivd,   T(e,e,e,d, e,e,e,d), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)
+
 #undef T
 #undef X
 #undef V

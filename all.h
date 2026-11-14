@@ -371,6 +371,7 @@ struct Tmp {
 	} width;
 	int visit;
 	uint gcmbid;
+	uint vec:1; /* vec.c: a vector value (class Kd, held in an xmm register; spilled in a 16-byte slot) */
 };
 
 struct Con {
@@ -485,6 +486,7 @@ extern int nofp;       /* -n (nfcxx): no floating-point registers in integer cod
 extern int nounwind;   /* -U (nfcxx): no unwind tables (CFI), the kernel's -fno-asynchronous-unwind-tables */
 extern int absaddr;    /* -A (nfcxx): global addresses are absolute immediates (gcc -mcmodel=kernel) */
 extern int pic;
+extern int vectorize;  /* -V (nfcxx): vectorize simple loops (vec.c; amd64_sysv, SSE) */
 
 /* util.c */
 typedef enum {
@@ -604,6 +606,9 @@ void adduse(Tmp *, int, Blk *, ...);
 void filluse(Fn *);
 void ssa(Fn *);
 void ssacheck(Fn *);
+
+/* vec.c */
+void vec(Fn *);
 
 /* copy.c */
 void narrowpars(Fn *fn);

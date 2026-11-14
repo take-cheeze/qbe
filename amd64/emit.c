@@ -101,6 +101,21 @@ static struct {
 	{ Ostoreb,  Ka, "movb %B0, %M1" },
 	{ Ostores,  Ka, "movss %S0, %M1" },
 	{ Ostored,  Ka, "movsd %D0, %M1" },
+	{ Ovecload,  Ka, "movups %M0, %=" },
+	{ Ovecstore, Ka, "movups %0, %M1" },
+	{ Ovecaddw,  Kd, "+paddd %1, %=" },
+	{ Ovecsubw,  Kd, "-psubd %1, %=" },
+	{ Ovecandw,  Kd, "+pand %1, %=" },
+	{ Ovecorw,   Kd, "+por %1, %=" },
+	{ Ovecxorw,  Kd, "+pxor %1, %=" },
+	{ Ovecadds,  Kd, "+addps %1, %=" },
+	{ Ovecsubs,  Kd, "-subps %1, %=" },
+	{ Ovecmuls,  Kd, "+mulps %1, %=" },
+	{ Ovecdivs,  Kd, "-divps %1, %=" },
+	{ Ovecaddd,  Kd, "+addpd %1, %=" },
+	{ Ovecsubd,  Kd, "-subpd %1, %=" },
+	{ Ovecmuld,  Kd, "+mulpd %1, %=" },
+	{ Ovecdivd,  Kd, "-divpd %1, %=" },
 	{ Oload,    Ka, "mov%k %M0, %=" },
 	{ Oloadsw,  Kl, "movslq %M0, %L=" },
 	{ Oloadsw,  Kw, "movl %M0, %W=" },
@@ -504,6 +519,20 @@ emitins(Ins i, E *e)
 		}
 		emitf(omap[o].fmt, &i, e);
 		break;
+	case Ovecbcastw:
+		/* the scalar into lane 0, then lane 0 into all four (pshufd) */
+		emitf("movd %W0, %=", &i, e);
+		emitf("pshufd $0, %=, %=", &i, e);
+		break;
+	case Ovecbcasts:
+		emitf("movss %S0, %=", &i, e);
+		emitf("pshufd $0, %=, %=", &i, e);
+		break;
+	case Ovecbcastd:
+		/* lanes 0 and 1 (the low quadword) into both quadwords */
+		emitf("movsd %D0, %=", &i, e);
+		emitf("pshufd $68, %=, %=", &i, e);
+		break;
 	case Onop:
 		/* just do nothing for nops, they are inserted
 		 * by some passes */
@@ -567,6 +596,21 @@ emitins(Ins i, E *e)
 		if (req(i.to, i.arg[0]))
 			break;
 		t0 = rtype(i.arg[0]);
+		if (i.cls == Kd
+		&& (t0 == RSlot || isreg(i.arg[0]))
+		&& (rtype(i.to) == RSlot || isreg(i.to))) {
+			/* a double in a slot (spill.c gives it 16 bytes) or a vector: the whole register moves,
+			 * movsd would keep only the low lane */
+			if (t0 == RSlot && rtype(i.to) == RSlot) {
+				i.arg[1] = TMP(XMM0+15);
+				emitf("movups %0, %1", &i, e);
+				emitf("movups %1, %=", &i, e);
+			} else if (isreg(i.to) && isreg(i.arg[0]))
+				emitf("movaps %0, %=", &i, e);
+			else
+				emitf("movups %0, %=", &i, e);
+			break;
+		}
 		if (i.cls == Kl
 		&& t0 == RCon
 		&& e->fn->con[i.arg[0].val].type == CBits) {
