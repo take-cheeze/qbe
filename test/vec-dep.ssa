@@ -1,0 +1,72 @@
+# Same-base dependences at constant distances: a store to a[i+d] and a load of a[i] are vectorized
+# when |d| is 0 or at least the vector width (here 8 and 0), and refused when 0 < |d| < 4 (here 2).
+
+export
+function w $dist8(l %a, w %n) {
+@start
+@head
+	%i =w phi @start 0, @latch %i2
+	%c =w csltw %i, %n
+	jnz %c, @body, @done
+@body
+	%t =l extsw %i
+	%o =l mul %t, 4
+	%pl =l add %a, %o
+	%x =w loadsw %pl
+	%y =w add %x, 1
+	%o8 =l add %o, 32
+	%ps =l add %a, %o8
+	storew %y, %ps
+	jmp @latch
+@latch
+	%i2 =w add %i, 1
+	jmp @head
+@done
+	ret 0
+}
+
+export
+function w $dist2(l %a, w %n) {
+@start
+@head
+	%i =w phi @start 0, @latch %i2
+	%c =w csltw %i, %n
+	jnz %c, @body, @done
+@body
+	%t =l extsw %i
+	%o =l mul %t, 4
+	%pl =l add %a, %o
+	%x =w loadsw %pl
+	%y =w add %x, 1
+	%o2 =l add %o, 8
+	%ps =l add %a, %o2
+	storew %y, %ps
+	jmp @latch
+@latch
+	%i2 =w add %i, 1
+	jmp @head
+@done
+	ret 0
+}
+
+# >>> driver
+# #include <stdio.h>
+# void dist8(int *, int);
+# void dist2(int *, int);
+# int A[80], R[80];
+# int main() {
+# 	int n, i, bad = 0;
+# 	for (n = 0; n <= 30; n++) {
+# 		for (i = 0; i < 80; i++) A[i] = R[i] = i * 3;
+# 		for (i = 0; i < n; i++) R[i + 8] = R[i] + 1;
+# 		dist8(A, n);
+# 		for (i = 0; i < 80; i++) if (A[i] != R[i]) bad++;
+# 		for (i = 0; i < 80; i++) A[i] = R[i] = i * 3;
+# 		for (i = 0; i < n; i++) R[i + 2] = R[i] + 1;
+# 		dist2(A, n);
+# 		for (i = 0; i < 80; i++) if (A[i] != R[i]) bad++;
+# 	}
+# 	printf("bad=%d\n", bad);
+# 	return bad != 0;
+# }
+# <<<

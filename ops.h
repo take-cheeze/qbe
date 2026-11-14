@@ -251,6 +251,10 @@ O(vecext0w,  T(d,e,e,e, e,e,e,e), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)   /* lan
 O(vecext1w,  T(d,e,e,e, e,e,e,e), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)   /* lane 1 of a vector, to a w */
 O(vecext2w,  T(d,e,e,e, e,e,e,e), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)   /* lane 2 of a vector, to a w */
 O(vecext3w,  T(d,e,e,e, e,e,e,e), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)   /* lane 3 of a vector, to a w */
+O(vecmuludq, T(e,e,e,d, e,e,e,d), F(0,0,0,1,0,0,0,0,0,0)) X(0,0,0) V(0)   /* pmuludq: the products of the even lanes, 64-bit */
+O(vecsrlq32, T(e,e,e,d, e,e,e,e), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)   /* psrlq 32: each 64-bit lane shifted down */
+O(vecpack02, T(e,e,e,d, e,e,e,e), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)   /* pshufd 0x88: lanes 0 and 2 to the low half */
+O(vecunpckl32, T(e,e,e,d, e,e,e,d), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0) /* punpckldq: interleave the low halves */
 
 #undef T
 #undef X

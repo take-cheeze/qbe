@@ -67,6 +67,7 @@ enum {
 enum {
 	NBREF = 8,	/* the distinct bases of a loop */
 	NRED = 4,	/* the reductions of a loop */
+	NACC = 32,	/* the element accesses of a loop */
 };
 
 typedef struct Loop Loop;
@@ -91,10 +92,15 @@ struct Loop {
 	char *adr;	/* per temporary: an address (base + index) */
 	char *lane;	/* per temporary: a vector value, its lane kind */
 	int64_t *step;	/* per index or address: its step in bytes per i */
+	int64_t *ioff;	/* per index or address: its constant byte offset */
 	Ref *base;	/* per address: its base */
 	char *inb;	/* per block id: in the loop (header or body) */
 	Ref *map;	/* build: per temporary, its vector value or clone */
 	int nbref;	/* the distinct bases of the accesses */
+	int nacc;
+	int64_t acc_off[NACC];	/* per access: its byte offset from its base at i = 0 */
+	int acc_base[NACC];
+	int acc_st[NACC];	/* stored to */
 	Ref bref[NBREF];
 	int bsz[NBREF];	/* per base: the element size */
 	int bst[NBREF];	/* per base: stored to */
@@ -162,6 +168,7 @@ vecop(int op, int kind)
 	switch (kind) {
 	case LW:
 		switch (op) {
+		case Omul: return -2;	/* no SSE2 instruction: mulw() */
 		case Oadd: return Ovecaddw;
 		case Osub: return Ovecsubw;
 		case Oand: return Ovecandw;
@@ -213,6 +220,12 @@ access(Loop *lp, Ref a, int size, int kind, int store, struct Stats *st)
 		return 0;
 	if (store)
 		lp->bst[j] = 1;
+	if (lp->nacc == NACC)
+		return 0;
+	lp->acc_off[lp->nacc] = lp->ioff[a.val];
+	lp->acc_base[lp->nacc] = j;
+	lp->acc_st[lp->nacc] = store;
+	lp->nacc++;
 	if (kind == LD)
 		st->hasd = 1;
 	else
@@ -240,6 +253,7 @@ classify(Fn *fn, Loop *lp, Ins *ins, struct Stats *st)
 		if (tn < 0) return 0;
 		lp->idx[tn] = 1;
 		lp->step[tn] = lp->step[a0.val];
+		lp->ioff[tn] = lp->ioff[a0.val];
 		lp->dch[tn] = 1;
 		return 1;
 	}
@@ -254,6 +268,7 @@ classify(Fn *fn, Loop *lp, Ins *ins, struct Stats *st)
 			return 0;
 		lp->idx[tn] = 1;
 		lp->step[tn] = lp->step[a0.val] * c;
+		lp->ioff[tn] = lp->ioff[a0.val] * c;
 		lp->dch[tn] = 1;
 		return 1;
 	}
@@ -262,8 +277,24 @@ classify(Fn *fn, Loop *lp, Ins *ins, struct Stats *st)
 			return 0;
 		lp->idx[tn] = 1;
 		lp->step[tn] = lp->step[a0.val] << c;
+		lp->ioff[tn] = lp->ioff[a0.val] << c;
 		lp->dch[tn] = 1;
 		return 1;
+	}
+	/* an index plus a constant: the same index, shifted by that many bytes */
+	if (ins->op == Oadd && ins->cls == Kl && tn >= 0) {
+		Ref ix = a0;
+		if ((isidx(lp, a0) && conint(fn, a1, &c)) || (isidx(lp, a1) && conint(fn, a0, &c))) {
+			if (!isidx(lp, a0))
+				ix = a1;
+			if (c > (1LL << 31) || c < -(1LL << 31))
+				return 0;
+			lp->idx[tn] = 1;
+			lp->step[tn] = lp->step[ix.val];
+			lp->ioff[tn] = lp->ioff[ix.val] + c;
+			lp->dch[tn] = 1;
+			return 1;
+		}
 	}
 	/* an address: an index plus a loop-invariant base */
 	if (ins->op == Oadd && ins->cls == Kl) {
@@ -271,9 +302,11 @@ classify(Fn *fn, Loop *lp, Ins *ins, struct Stats *st)
 			return 0;
 		if (isidx(lp, a0) && isinv(fn, lp, a1, Kl)) {
 			lp->step[tn] = lp->step[a0.val];
+			lp->ioff[tn] = lp->ioff[a0.val];
 			lp->base[tn] = a1;
 		} else if (isidx(lp, a1) && isinv(fn, lp, a0, Kl)) {
 			lp->step[tn] = lp->step[a1.val];
+			lp->ioff[tn] = lp->ioff[a1.val];
 			lp->base[tn] = a0;
 		} else
 			return 0;
@@ -329,7 +362,7 @@ classify(Fn *fn, Loop *lp, Ins *ins, struct Stats *st)
 	/* arithmetic on lanes */
 	k = ins->cls;
 	kind = k == Kw ? LW : k == Ks ? LS : k == Kd ? LD : LNone;
-	if (kind == LNone || vecop(ins->op, kind) < 0 || tn < 0)
+	if (kind == LNone || vecop(ins->op, kind) == -1 || tn < 0)
 		return 0;
 	a[0] = a0;
 	a[1] = a1;
@@ -459,6 +492,7 @@ findloop(Fn *fn, Blk *H, Loop *lp)
 	lp->n = cmp->arg[1];
 	lp->vf = 0;
 	lp->nbref = 0;
+	lp->nacc = 0;
 	nt = fn->ntmp;
 	nb = fn->nblk;
 	lp->nt = nt;
@@ -468,6 +502,7 @@ findloop(Fn *fn, Blk *H, Loop *lp)
 	lp->adr = emalloc(nt);
 	lp->lane = emalloc(nt);
 	lp->step = emalloc(nt * sizeof lp->step[0]);
+	lp->ioff = emalloc(nt * sizeof lp->ioff[0]);
 	lp->base = emalloc(nt * sizeof lp->base[0]);
 	lp->inb = emalloc(nb);
 	lp->map = emalloc(nt * sizeof lp->map[0]);
@@ -498,6 +533,7 @@ findloop(Fn *fn, Blk *H, Loop *lp)
 	lp->inl[cmp->to.val] = 1;
 	lp->idx[lp->i.val] = 1;
 	lp->step[lp->i.val] = 1;
+	lp->ioff[lp->i.val] = 0;
 	for (p=H->phi; p; p=p->link)
 		lp->inl[p->to.val] = 1;
 	for (k=0; k<lp->nbody; k++) {
@@ -544,6 +580,26 @@ findloop(Fn *fn, Blk *H, Loop *lp)
 		return rej(__LINE__);	/* reductions fold four w lanes */
 	lp->vf = st.hasd ? 2 : 4;
 	lp->nst = st.nst;
+	/* a store and another access of its base: their distance in elements is 0, or at least VF */
+	for (k=0; k<(uint)lp->nacc; k++) {
+		int64_t d, sz;
+		int q;
+
+		if (!lp->acc_st[k])
+			continue;
+		sz = lp->bsz[lp->acc_base[k]];
+		for (q=0; q<lp->nacc; q++) {
+			if (q == (int)k || lp->acc_base[q] != lp->acc_base[k])
+				continue;
+			d = lp->acc_off[k] - lp->acc_off[q];
+			if (d == 0)
+				continue;
+			if (d % sz != 0)
+				return rej(__LINE__);
+			if ((d < 0 ? -d : d) / sz < lp->vf)
+				return rej(__LINE__);
+		}
+	}
 
 	/* a value of the body is used only in the body; the latch's use is in H's phi */
 	for (t=Tmp0; t<nt; t++) {
@@ -596,6 +652,30 @@ mkphi(Ref to, int cls, Blk *b0, Ref a0, Blk *b1, Ref a1)
 	p->arg[1] = a1;
 	p->blk[1] = b1;
 	return p;
+}
+
+/* the low 32 bits of the lanes' products, with SSE2 only: pmuludq on the even lanes and on the odd lanes (shifted
+ * down), then the low halves packed and interleaved */
+static Ref
+mulw(Fn *fn, Ref a, Ref b)
+{
+	Ref t1, as, bs, t2, x, y, r;
+
+	t1 = newvec(fn);
+	push(Ovecmuludq, Kd, t1, a, b);
+	as = newvec(fn);
+	push(Ovecsrlq32, Kd, as, a, R);
+	bs = newvec(fn);
+	push(Ovecsrlq32, Kd, bs, b, R);
+	t2 = newvec(fn);
+	push(Ovecmuludq, Kd, t2, as, bs);
+	x = newvec(fn);
+	push(Ovecpack02, Kd, x, t1, R);
+	y = newvec(fn);
+	push(Ovecpack02, Kd, y, t2, R);
+	r = newvec(fn);
+	push(Ovecunpckl32, Kd, r, x, y);
+	return r;
 }
 
 /* an address or index operand: the vector loop's clone of it, or the operand itself */
@@ -830,8 +910,12 @@ build(Fn *fn, Loop *lp)
 			kind = ins->cls == Kw ? LW : ins->cls == Ks ? LS : LD;
 			a0 = laneop(fn, lp, ins->arg[0], ins->cls, kind);
 			a1 = laneop(fn, lp, ins->arg[1], ins->cls, kind);
-			t = newvec(fn);
-			push(vecop(ins->op, kind), Kd, t, a0, a1);
+			if (vecop(ins->op, kind) == -2)
+				t = mulw(fn, a0, a1);
+			else {
+				t = newvec(fn);
+				push(vecop(ins->op, kind), Kd, t, a0, a1);
+			}
 			lp->map[ins->to.val] = t;
 		}
 	}
@@ -978,6 +1062,7 @@ vec(Fn *fn)
 		free(lp.adr);
 		free(lp.lane);
 		free(lp.step);
+		free(lp.ioff);
 		free(lp.base);
 		free(lp.inb);
 		free(lp.map);
