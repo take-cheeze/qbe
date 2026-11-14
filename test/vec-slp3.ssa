@@ -1,0 +1,41 @@
+# Straight-line SLP of two doubles across two bases (qbe -V): the overlap test at run time, as vec-slp2.
+export
+function w $slpd(l %a, l %b) {
+@start
+	%p1 =l add %b, 8
+	%x0 =d loadd %b
+	%x1 =d loadd %p1
+	%y0 =d mul %x0, d_2.0
+	%y1 =d mul %x1, d_2.0
+	%z0 =d add %y0, d_1.0
+	%z1 =d add %y1, d_1.0
+	stored %z0, %a
+	%q1 =l add %a, 8
+	stored %z1, %q1
+	ret 0
+}
+
+# >>> driver
+# #include <stdio.h>
+# void slpd(double *, double *);
+# double A[32], B[32], C[2];
+# int main() {
+# 	int k, off, bad = 0;
+# 	for (off = 0; off < 6; off++) {
+# 		for (k = 0; k < 32; k++) { A[k] = -9; B[k] = k * 0.5 + 1; }
+# 		C[0] = B[0] * 2.0 + 1.0; C[1] = B[1] * 2.0 + 1.0;
+# 		slpd(A, B);
+# 		if (A[0] != C[0] || A[1] != C[1]) bad++;
+# 		for (k = 2; k < 32; k++) if (A[k] != -9) bad++;
+# 	}
+# 	for (off = -4; off <= 4; off++) {
+# 		double *a = A + 8 + off, *b = A + 8;
+# 		for (k = 0; k < 32; k++) A[k] = k * 0.25 + 3;
+# 		C[0] = b[0] * 2.0 + 1.0; C[1] = b[1] * 2.0 + 1.0;
+# 		slpd(a, b);
+# 		if (a[0] != C[0] || a[1] != C[1]) bad++;
+# 	}
+# 	printf(bad ? "FAILED\n" : "ok\n");
+# 	return bad != 0;
+# }
+# <<<

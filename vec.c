@@ -2205,7 +2205,7 @@ slpblock(Fn *fn, Blk *b)
 			}
 			if (!inplace) {
 				/* the run-time test: a block with phis is not split (its entries would move) */
-				if (b->phi || kind == LD)
+				if (b->phi)
 					goto no;
 				slpsplit(fn, &s, b, vals, n, kind, size, base0, o0);
 				if (vecremarks)
