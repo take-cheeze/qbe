@@ -523,6 +523,28 @@ emitins(Ins i, E *e)
 		}
 		emitf(omap[o].fmt, &i, e);
 		break;
+	case Ovecext0s:
+		emitf("movss %0, %=", &i, e);
+		break;
+	case Ovecext1s:
+		emitf("pshufd $1, %0, %%xmm15", &i, e);
+		emitf("movss %%xmm15, %=", &i, e);
+		break;
+	case Ovecext2s:
+		emitf("pshufd $2, %0, %%xmm15", &i, e);
+		emitf("movss %%xmm15, %=", &i, e);
+		break;
+	case Ovecext3s:
+		emitf("pshufd $3, %0, %%xmm15", &i, e);
+		emitf("movss %%xmm15, %=", &i, e);
+		break;
+	case Ovecext0d:
+		emitf("movsd %0, %=", &i, e);
+		break;
+	case Ovecext1d:
+		emitf("pshufd $14, %0, %%xmm15", &i, e);
+		emitf("movsd %%xmm15, %=", &i, e);
+		break;
 	case Ovecext0w:
 		emitf("movd %0, %W=", &i, e);
 		break;

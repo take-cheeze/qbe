@@ -117,6 +117,7 @@ struct Loop {
 	Ref redvn[NRED];	/* build: its next value (Bv) */
 	Ref redhs[NRED];	/* build: the scalar accumulator (Hv's phi), the entry's init */
 	Ref redrd[NRED];	/* build: the folded scalar value (Rd) */
+	int redcls[NRED];	/* the class of the accumulator: Kw, or Ks and Kd with -F */
 };
 
 struct Stats {
@@ -345,18 +346,25 @@ classify(Fn *fn, Loop *lp, Ins *ins, struct Stats *st)
 	/* the latch value of a reduction: acc2 = op acc, lane */
 	if (tn >= 0 && lp->redof[tn] < 0) {
 		k = -lp->redof[tn] - 1;
-		if (ins->cls != Kw || (ins->op != Oadd && ins->op != Oand && ins->op != Oor && ins->op != Oxor))
+		kind = lp->redcls[k] == Kw ? LW : lp->redcls[k] == Ks ? LS : LD;
+		if (ins->cls != lp->redcls[k])
 			return 0;
-		if (req(a0, lp->redph[k]->to) && rtype(a1) == RTmp && lp->lane[a1.val] == LW)
+		if (kind == LW ? (ins->op != Oadd && ins->op != Oand && ins->op != Oor && ins->op != Oxor)
+		               : ins->op != Oadd)
+			return 0;
+		if (req(a0, lp->redph[k]->to) && rtype(a1) == RTmp && lp->lane[a1.val] == kind)
 			;
-		else if (req(a1, lp->redph[k]->to) && rtype(a0) == RTmp && lp->lane[a0.val] == LW)
+		else if (req(a1, lp->redph[k]->to) && rtype(a0) == RTmp && lp->lane[a0.val] == kind)
 			;
 		else
 			return 0;
 		lp->redop[k] = ins->op;
 		lp->redseen[k] = 1;
 		st->nvec++;
-		st->hasws = 1;
+		if (kind == LD)
+			st->hasd = 1;
+		else
+			st->hasws = 1;
 		return 1;
 	}
 	/* arithmetic on lanes */
@@ -513,8 +521,9 @@ findloop(Fn *fn, Blk *H, Loop *lp)
 	for (p=H->phi; p; p=p->link) {
 		if (p == ph)
 			continue;
-		if (p->narg != 2 || p->cls != Kw || nr == NRED)
+		if (p->narg != 2 || nr == NRED || !(p->cls == Kw || (vecassoc && (p->cls == Ks || p->cls == Kd))))
 			return rej(__LINE__);
+		lp->redcls[nr] = p->cls;
 		if (!((p->blk[0] == P && p->blk[1] == L) || (p->blk[0] == L && p->blk[1] == P)))
 			return rej(__LINE__);
 		lp->redph[nr] = p;
@@ -576,8 +585,6 @@ findloop(Fn *fn, Blk *H, Loop *lp)
 			return rej(__LINE__);
 	if (st.hasd && st.hasws)
 		return rej(__LINE__);
-	if (nr > 0 && st.hasd)
-		return rej(__LINE__);	/* reductions fold four w lanes */
 	lp->vf = st.hasd ? 2 : 4;
 	lp->nst = st.nst;
 	/* a store and another access of its base: their distance in elements is 0, or at least VF */
@@ -832,12 +839,13 @@ build(Fn *fn, Loop *lp)
 	/* the identity vector of each reduction, set up at P: 0, or all ones for and */
 	nib = 0;
 	for (k=0; k<(uint)nred; k++) {
+		/* the identity: all ones for and; zero for add, or and xor (and +0.0 for a float add) */
 		c = newtmp("vec", Kw, fn);
 		push(Ocopy, Kw, c, getcon(lp->redop[k] == Oand ? -1 : 0, fn), R);
 		lp->redvi[k] = newvec(fn);
 		push(Ovecbcastw, Kd, lp->redvi[k], c, R);
 		lp->redva[k] = newvec(fn);
-		lp->redhs[k] = newtmp("vec", Kw, fn);
+		lp->redhs[k] = newtmp("vec", lp->redcls[k], fn);
 		lp->redvn[k] = R;
 		lp->redrd[k] = R;
 	}
@@ -879,9 +887,10 @@ build(Fn *fn, Loop *lp)
 			if (rtype(ins->to) == RTmp && lp->redof[ins->to.val] < 0) {
 				rk = -lp->redof[ins->to.val] - 1;
 				Ref other = req(ins->arg[0], lp->redph[rk]->to) ? ins->arg[1] : ins->arg[0];
-				a1 = laneop(fn, lp, other, Kw, LW);
+				kind = lp->redcls[rk] == Kw ? LW : lp->redcls[rk] == Ks ? LS : LD;
+				a1 = laneop(fn, lp, other, lp->redcls[rk], kind);
 				t = newvec(fn);
-				push(vecop(ins->op, LW), Kd, t, lp->redva[rk], a1);
+				push(vecop(ins->op, kind), Kd, t, lp->redva[rk], a1);
 				lp->redvn[rk] = t;
 				continue;
 			}
@@ -930,12 +939,13 @@ build(Fn *fn, Loop *lp)
 	if (nred) {
 		nib = 0;
 		for (k=0; k<(uint)nred; k++) {
+			int rc = lp->redcls[k];
 			t = lp->redhs[k];
-			for (j=0; j<4; j++) {
-				e = newtmp("vec", Kw, fn);
-				push(Ovecext0w + j, Kw, e, lp->redva[k], R);
-				t2 = newtmp("vec", Kw, fn);
-				push(lp->redop[k], Kw, t2, t, e);
+			for (j=0; j<(uint)lp->vf; j++) {
+				e = newtmp("vec", rc, fn);
+				push(rc == Kw ? Ovecext0w + j : rc == Ks ? Ovecext0s + j : Ovecext0d + j, rc, e, lp->redva[k], R);
+				t2 = newtmp("vec", rc, fn);
+				push(lp->redop[k], rc, t2, t, e);
 				t = t2;
 			}
 			lp->redrd[k] = t;
@@ -982,7 +992,7 @@ build(Fn *fn, Loop *lp)
 	Hv->phi = hp;
 	for (k=0; k<(uint)nred; k++) {
 		vp = mkphi(lp->redva[k], Kd, check ? Chk : P, lp->redvi[k], Bv, lp->redvn[k]);
-		sp = mkphi(lp->redhs[k], Kw, check ? Chk : P, lp->redinit[k], Bv, lp->redhs[k]);
+		sp = mkphi(lp->redhs[k], lp->redcls[k], check ? Chk : P, lp->redinit[k], Bv, lp->redhs[k]);
 		hp->link = vp;
 		vp->link = sp;
 		hp = sp;

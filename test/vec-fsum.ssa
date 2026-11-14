@@ -1,0 +1,66 @@
+# Float and double sums, vectorized with -F (they reassociate). The data are small integers,
+# so every partial sum is exact and the driver can compare with a sequential sum.
+
+export
+function s $fsum(l %a, w %n, s %init) {
+@start
+@head
+	%i =w phi @start 0, @latch %i2
+	%s =s phi @start %init, @latch %s2
+	%c =w csltw %i, %n
+	jnz %c, @body, @done
+@body
+	%t =l extsw %i
+	%o =l mul %t, 4
+	%pa =l add %a, %o
+	%x =s loads %pa
+	%s2 =s add %s, %x
+	jmp @latch
+@latch
+	%i2 =w add %i, 1
+	jmp @head
+@done
+	ret %s
+}
+
+export
+function d $dsum(l %a, w %n, d %init) {
+@start
+@head
+	%i =w phi @start 0, @latch %i2
+	%s =d phi @start %init, @latch %s2
+	%c =w csltw %i, %n
+	jnz %c, @body, @done
+@body
+	%t =l extsw %i
+	%o =l mul %t, 8
+	%pa =l add %a, %o
+	%x =d loadd %pa
+	%s2 =d add %s, %x
+	jmp @latch
+@latch
+	%i2 =w add %i, 1
+	jmp @head
+@done
+	ret %s
+}
+
+# >>> driver
+# #include <stdio.h>
+# float fsum(float *, int, float);
+# double dsum(double *, int, double);
+# float F[64];
+# double D[64];
+# int main() {
+# 	int n, i, bad = 0;
+# 	for (i = 0; i < 64; i++) { F[i] = (i * 7) % 13 - 6; D[i] = (i * 5) % 11 - 4; }
+# 	for (n = 0; n <= 40; n++) {
+# 		float fs = 3.0f; double ds = 2.0;
+# 		for (i = 0; i < n; i++) { fs += F[i]; ds += D[i]; }
+# 		if (fsum(F, n, 3.0f) != fs) { bad++; printf("f n=%d\n", n); }
+# 		if (dsum(D, n, 2.0) != ds) { bad++; printf("d n=%d\n", n); }
+# 	}
+# 	printf("bad=%d\n", bad);
+# 	return bad != 0;
+# }
+# <<<
