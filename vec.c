@@ -878,7 +878,7 @@ findloop(Fn *fn, Blk *H, Loop *lp)
 	if (lp->wide && !lp->dbl)
 		lp->vf = 8;
 	/* rv64 (RVV): the same loops, four lanes; any other loop stays out (the rv64 emitter has no SSE forms) */
-	lp->rvv = vecavx && strcmp(T.name, "rv64") == 0 && !st.hasd && !st.conv && !lp->hascond && !lp->anystrd;
+	lp->rvv = vecavx && strcmp(T.name, "rv64") == 0 && !st.hasd && !st.conv && !lp->anystrd;
 	if (strcmp(T.name, "rv64") == 0 && !lp->rvv)
 		return rej(__LINE__);
 	lp->nst = st.nst;
