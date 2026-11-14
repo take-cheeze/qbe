@@ -312,6 +312,8 @@ O(vecfled256, T(e,e,e,d, e,e,e,d), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)  /* vcm
 O(vecfold256, T(e,e,e,d, e,e,e,d), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)  /* vextracti128: the high 128 bits of a ymm, as an xmm */
 O(vecloadst, T(e,e,e,m, e,e,e,e), F(0,0,0,0,0,0,0,0,0,1)) X(0,0,1) V(0)  /* vlse32 with an 8-byte stride (RVV stride-2 loads) */
 O(vecstorest, T(d,e,e,e, m,e,e,e), F(0,0,0,0,0,0,0,0,0,1)) X(0,0,1) V(0)  /* vsse32 with an 8-byte stride */
+O(vecloadstd, T(e,e,e,m, e,e,e,e), F(0,0,0,0,0,0,0,0,0,1)) X(0,0,1) V(0)  /* vlse64 with a 16-byte stride (RVV double stride-2 loads) */
+O(vecstorestd, T(d,e,e,e, m,e,e,e), F(0,0,0,0,0,0,0,0,0,1)) X(0,0,1) V(0)  /* vsse64 with a 16-byte stride */
 
 #undef T
 #undef X

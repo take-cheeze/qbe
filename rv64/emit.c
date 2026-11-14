@@ -458,6 +458,16 @@ emitins(Ins *i, Fn *fn, FILE *f)
 		fprintf(f, "\tli t6, 8\n");
 		fprintf(f, "\tvsse32.v v%d, (%s), t6\n", VREG(i->arg[0]), rname[i->arg[1].val]);
 		break;
+	case Ovecloadstd:	/* two doubles at a 16-byte stride: the even elements of a window */
+		vsetvl64(f);
+		fprintf(f, "\tli t6, 16\n");
+		fprintf(f, "\tvlse64.v v%d, (%s), t6\n", VREG(i->to), rname[i->arg[0].val]);
+		break;
+	case Ovecstorestd:
+		vsetvl64(f);
+		fprintf(f, "\tli t6, 16\n");
+		fprintf(f, "\tvsse64.v v%d, (%s), t6\n", VREG(i->arg[0]), rname[i->arg[1].val]);
+		break;
 	case Ovecaddd:
 		vsetvl64(f);
 		fprintf(f, "\tvfadd.vv v%d, v%d, v%d\n", VREG(i->to), VREG(i->arg[0]), VREG(i->arg[1]));

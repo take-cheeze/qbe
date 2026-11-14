@@ -878,7 +878,7 @@ findloop(Fn *fn, Blk *H, Loop *lp)
 	if (lp->wide && !lp->dbl)
 		lp->vf = 8;
 	/* rv64 (RVV): the same loops, four lanes; any other loop stays out (the rv64 emitter has no SSE forms) */
-	lp->rvv = vecavx && strcmp(T.name, "rv64") == 0 && !(lp->anystrd && st.hasd) && !(st.hasd && st.hasws && !st.conv);
+	lp->rvv = vecavx && strcmp(T.name, "rv64") == 0 && !(st.hasd && st.hasws && !st.conv);
 	if (strcmp(T.name, "rv64") == 0 && !lp->rvv)
 		return rej(__LINE__);
 	lp->nst = st.nst;
@@ -912,7 +912,8 @@ findloop(Fn *fn, Blk *H, Loop *lp)
 			vc += 4 * lp->nbref * (lp->nbref - 1);	/* the runtime overlap tests */
 		if (lp->hascond)
 			vc += 2;
-		if (rtype(lp->n) == RCon && conint(fn, lp->n, &cst) && cst < 2 * lp->vf)
+		/* a constant bound is the trip count only for a count up from 0 (a down count's bound is not) */
+		if (lp->ivstep > 0 && rtype(lp->n) == RCon && conint(fn, lp->n, &cst) && cst < 2 * lp->vf)
 			return rej(__LINE__);	/* too few iterations for a vector loop */
 		if (vc > sc * lp->vf) {
 			if (debug['V'])
@@ -1489,7 +1490,7 @@ build(Fn *fn, Loop *lp)
 				if (lp->strd[ins->arg[0].val] && lp->rvv) {
 					/* RVV: the even elements of the window, by one strided load */
 					t = newvec(fn);
-					push(Ovecloadst, Kd, t, cloneref(lp, ins->arg[0]), R);
+					push(ins->op == Oload && ins->cls == Kd ? Ovecloadstd : Ovecloadst, Kd, t, cloneref(lp, ins->arg[0]), R);
 					lp->map[ins->to.val] = t;
 					continue;
 				}
@@ -1527,7 +1528,7 @@ build(Fn *fn, Loop *lp)
 				}
 				if (lp->strd[ins->arg[1].val] && lp->rvv) {
 					/* RVV: the value's lanes to the even elements, by one strided store */
-					push(Ovecstorest, Kw, R, req(ins->arg[0], lp->i) ? lp->vi : lp->map[ins->arg[0].val],
+					push(ins->op == Ostored ? Ovecstorestd : Ovecstorest, Kw, R, req(ins->arg[0], lp->i) ? lp->vi : lp->map[ins->arg[0].val],
 						cloneref(lp, ins->arg[1]));
 					continue;
 				}
