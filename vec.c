@@ -116,6 +116,7 @@ struct Loop {
 	Ref *map;	/* build: per temporary, its vector value or clone */
 	int nbref;	/* the distinct bases of the accesses */
 	int nacc;
+	int conv;	/* the int-double conversions of the body */
 	int64_t acc_off[NACC];	/* per access: its byte offset from its base at i = 0 */
 	int acc_base[NACC];
 	int acc_st[NACC];	/* stored to */
@@ -147,6 +148,7 @@ struct Stats {
 	int nld, nst;
 	int hasd, hasws;
 	int nvec;
+	int conv;
 };
 
 /* a loop the pass refuses: under -d V, the line of the refusal */
@@ -358,6 +360,21 @@ classify(Fn *fn, Loop *lp, Ins *ins, struct Stats *st)
 		if (!access(lp, a1, size, kind, 1, st))
 			return 0;
 		st->nst++;
+		return 1;
+	}
+	/* the conversions of mixed lanes: w to d (cvtdq2pd) and d to w (cvttpd2dq); the lanes are two wide then */
+	if ((ins->op == Oswtof && ins->cls == Kd && rtype(a0) == RTmp && lp->lane[a0.val] == LW) ||
+	    (ins->op == Odtosi && ins->cls == Kw && rtype(a0) == RTmp && lp->lane[a0.val] == LD)) {
+		if (tn < 0)
+			return 0;
+		lp->lane[tn] = ins->op == Oswtof ? LD : LW;
+		lp->dch[tn] = 1;
+		st->nvec++;
+		st->conv++;
+		if (lp->lane[tn] == LD)
+			st->hasd = 1;
+		else
+			st->hasws = 1;
 		return 1;
 	}
 	/* element loads */
@@ -838,8 +855,8 @@ findloop(Fn *fn, Blk *H, Loop *lp)
 					if (rtype(ins->to) == RTmp && lp->redof[ins->to.val] < 0)
 						return rej(__LINE__);	/* a reduction in a conditional path */
 	}
-	if (st.hasd && st.hasws)
-		return rej(__LINE__);
+	if (st.hasd && st.hasws && !st.conv)
+		return rej(__LINE__);	/* mixed widths only through the conversions */
 	lp->vf = st.hasd ? 2 : 4;
 	lp->nst = st.nst;
 	for (t=Tmp0; t<nt; t++)
@@ -1404,7 +1421,8 @@ build(Fn *fn, Loop *lp)
 					continue;
 				}
 				t = newvec(fn);
-				push(Ovecload, Kd, t, cloneref(lp, ins->arg[0]), R);
+				/* two w lanes (the loop has doubles): the low 64 bits */
+				push(ins->op == Oloadsw && lp->vf == 2 ? Ovecload8 : Ovecload, Kd, t, cloneref(lp, ins->arg[0]), R);
 				lp->map[ins->to.val] = t;
 				continue;
 			case Ostorew:
@@ -1415,9 +1433,10 @@ build(Fn *fn, Loop *lp)
 					Ref x = req(ins->arg[0], lp->i) ? lp->vi : lp->map[ins->arg[0].val];
 					Ref old = newvec(fn), nv;
 
-					push(Ovecload, Kd, old, cloneref(lp, ins->arg[1]), R);
+					int w8 = ins->op == Ostorew && lp->vf == 2;
+					push(w8 ? Ovecload8 : Ovecload, Kd, old, cloneref(lp, ins->arg[1]), R);
 					nv = lp->guard[k] == 1 ? vsel(fn, lp->cmask, x, old) : vsel(fn, lp->cmask, old, x);
-					push(Ovecstore, Kw, R, nv, cloneref(lp, ins->arg[1]));
+					push(w8 ? Ovecstore8 : Ovecstore, Kw, R, nv, cloneref(lp, ins->arg[1]));
 					continue;
 				}
 				if (lp->strd[ins->arg[1].val]) {
@@ -1441,11 +1460,20 @@ build(Fn *fn, Loop *lp)
 					push(Ovecstore, Kw, R, out1, a16);
 					continue;
 				}
-				push(Ovecstore, Kw, R, req(ins->arg[0], lp->i) ? lp->vi : lp->map[ins->arg[0].val],
-					cloneref(lp, ins->arg[1]));
+				push(ins->op == Ostorew && lp->vf == 2 ? Ovecstore8 : Ovecstore, Kw, R,
+					req(ins->arg[0], lp->i) ? lp->vi : lp->map[ins->arg[0].val], cloneref(lp, ins->arg[1]));
 				continue;
 			default:
 				break;
+			}
+			/* the conversions of mixed lanes */
+			if (ins->op == Oswtof || ins->op == Odtosi) {
+				int from = ins->op == Oswtof ? Kw : Kd;
+				a0 = laneop(fn, lp, ins->arg[0], from, from == Kw ? LW : LD);
+				t = newvec(fn);
+				push(ins->op == Oswtof ? Ovecw2d : Ovecd2w, Kd, t, a0, R);
+				lp->map[ins->to.val] = t;
+				continue;
 			}
 			kind = ins->cls == Kw ? LW : ins->cls == Ks ? LS : LD;
 			a0 = laneop(fn, lp, ins->arg[0], ins->cls, kind);
