@@ -152,11 +152,13 @@ struct Stats {
 };
 
 /* a loop the pass refuses: under -d V, the line of the refusal */
+static Fn *vecfn;	/* the function being looked at, for the remarks */
+
 static int
 rej(int line)
 {
 	if (debug['V'] || vecremarks)
-		fprintf(stderr, "vec: refused at vec.c:%d\n", line);
+		fprintf(stderr, "vec: %s: refused at vec.c:%d\n", vecfn ? vecfn->name : "?", line);
 	return 0;
 }
 
@@ -1631,6 +1633,7 @@ vec(Fn *fn)
 		memset(&lp, 0, sizeof lp);
 		if (debug['W'])
 			printfn(fn, stderr);	/* -d W: the IR the pass sees */
+		vecfn = fn;
 		if (findloop(fn, cand[k], &lp)) {
 			if (debug['V'] || vecremarks)
 				fprintf(stderr, "vec: %s: loop at @%d vectorized: %d lanes, %d bases, %d reductions%s%s\n",
