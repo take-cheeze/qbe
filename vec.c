@@ -1606,6 +1606,351 @@ build(Fn *fn, Loop *lp)
 	(void)j;
 }
 
+/* ---- SLP: straight-line code. A block whose only memory operations are VF stores to consecutive
+ * elements of one base, whose values form one element-wise tree over loads of consecutive elements (or
+ * broadcasts), is rebuilt as that tree in vector ops. Its region is tested against the loads' regions at run
+ * time when they may alias (then the scalar block runs); exact same-region loads need no test. */
+
+enum { SLPN = 24 };
+
+typedef struct Slp Slp;
+struct Slp {
+	Blk *b;
+	Ins **def;		/* per temporary: its definition in the block, or 0 */
+	int nodes;
+	int nld;		/* the loads of the tree */
+	Ref lbase[SLPN];	/* their bases and byte offsets (the element size is in lsz) */
+	int64_t loff[SLPN];
+	int lsz[SLPN];
+};
+
+/* an address as a base and a constant byte offset, through the constant adds of the block */
+static Ref
+slpaddr(Fn *fn, Slp *s, Ref a, int64_t *off)
+{
+	int64_t c;
+
+	*off = 0;
+	for (;;) {
+		Ins *d;
+
+		if (rtype(a) != RTmp || !s->def[a.val])
+			return a;
+		d = s->def[a.val];
+		if (d->op != Oadd || d->cls != Kl)
+			return a;
+		if (conint(fn, d->arg[1], &c))
+			a = d->arg[0];
+		else if (conint(fn, d->arg[0], &c))
+			a = d->arg[1];
+		else
+			return a;
+		*off += c;
+	}
+}
+
+/* an address base is fine when it is not defined in the block, or is a copy of a value that is not:
+ * such a copy is kept by the rewrite */
+static int
+slpbase(Slp *s, Ref base)
+{
+	Ins *d;
+
+	if (rtype(base) != RTmp || !s->def[base.val])
+		return 1;
+	d = s->def[base.val];
+	return d->op == Ocopy && !(rtype(d->arg[0]) == RTmp && s->def[d->arg[0].val]);
+}
+
+/* the lanes vals (n, all of this kind) are one tree of element-wise ops over loads and broadcasts */
+static int
+slpok(Fn *fn, Slp *s, Ref *vals, int n, int kind, int depth)
+{
+	Ins *d0;
+	int j, same;
+	int64_t off0, offj;
+	Ref base0, basej;
+	int size = kind == LD ? 8 : 4;
+
+	if (++s->nodes > SLPN || depth > 6)
+		return 0;
+	same = 1;
+	for (j=1; j<n; j++)
+		if (!req(vals[j], vals[0]))
+			same = 0;
+	if (same && (rtype(vals[0]) == RCon || (rtype(vals[0]) == RTmp && !s->def[vals[0].val])))
+		return 1;	/* a broadcast of a constant or of a value from before the block */
+	if (rtype(vals[0]) != RTmp || !s->def[vals[0].val])
+		return 0;
+	d0 = s->def[vals[0].val];
+	for (j=0; j<n; j++) {
+		Ins *dj;
+
+		if (rtype(vals[j]) != RTmp || !s->def[vals[j].val] || fn->tmp[vals[j].val].nuse != 1)
+			return 0;
+		dj = s->def[vals[j].val];
+		if (dj->op != d0->op || dj->cls != d0->cls)
+			return 0;
+	}
+	if ((d0->op == Oloadsw && kind == LW) || (d0->op == Oload && (kind == LS || kind == LD))) {
+		base0 = slpaddr(fn, s, s->def[vals[0].val]->arg[0], &off0);
+		if (!slpbase(s, base0))
+			return 0;
+		for (j=0; j<n; j++) {
+			basej = slpaddr(fn, s, s->def[vals[j].val]->arg[0], &offj);
+			if (!req(basej, base0) || offj != off0 + j*size)
+				return 0;
+		}
+		if (s->nld == SLPN)
+			return 0;
+		s->lbase[s->nld] = base0;
+		s->loff[s->nld] = off0;
+		s->lsz[s->nld++] = size;
+		return 1;
+	}
+	if (kind == LNone || (vecop(d0->op, kind) == -1 && !(kind == LW && d0->op == Omul)))
+		return 0;
+	{
+		Ref ops[8];
+		int k;
+
+		for (k=0; k<2; k++) {
+			for (j=0; j<n; j++)
+				ops[j] = s->def[vals[j].val]->arg[k];
+			if (!slpok(fn, s, ops, n, kind, depth+1))
+				return 0;
+		}
+	}
+	return 1;
+}
+
+static Ref
+slpemit(Fn *fn, Slp *s, Ref *vals, int n, int kind)
+{
+	Ins *d0;
+	Ref t, base0, ops[8], a0, a1;
+	int j, k, same = 1;
+	int64_t off0;
+
+	for (j=1; j<n; j++)
+		if (!req(vals[j], vals[0]))
+			same = 0;
+	if (same && (rtype(vals[0]) == RCon || !s->def[vals[0].val])) {
+		Ref sc = vals[0];
+		int c = kind == LW ? Kw : kind == LS ? Ks : Kd;
+
+		if (rtype(sc) == RCon) {
+			Ref cc = newtmp("vec", c, fn);
+			push(Ocopy, c, cc, sc, R);
+			sc = cc;
+		}
+		t = newvec(fn);
+		push(kind == LW ? Ovecbcastw : kind == LS ? Ovecbcasts : Ovecbcastd, Kd, t, sc, R);
+		return t;
+	}
+	d0 = s->def[vals[0].val];
+	if (d0->op == Oloadsw || d0->op == Oload) {
+		base0 = slpaddr(fn, s, d0->arg[0], &off0);
+		{
+			Ref addr = base0;
+			if (off0) {
+				addr = newtmp("vec", Kl, fn);
+				push(Oadd, Kl, addr, base0, getcon(off0, fn));
+			}
+			t = newvec(fn);
+			push(Ovecload, Kd, t, addr, R);
+		}
+		return t;
+	}
+	for (k=0; k<2; k++) {
+		for (j=0; j<n; j++)
+			ops[j] = s->def[vals[j].val]->arg[k];
+		if (k == 0)
+			a0 = slpemit(fn, s, ops, n, kind);
+		else
+			a1 = slpemit(fn, s, ops, n, kind);
+	}
+	t = newvec(fn);
+	if (d0->op == Omul && kind == LW && strcmp(T.name, "arm64") == 0)
+		push(Ovecmulw, Kd, t, a0, a1);
+	else if (d0->op == Omul && kind == LW)
+		t = mulw(fn, a0, a1);
+	else
+		push(vecop(d0->op, kind), Kd, t, a0, a1);
+	return t;
+}
+
+/* is tmp t used outside block b? scans the blocks directly: the use lists are not reliable here
+ * (newtmp sets nuse without allocating a list) */
+static int
+usedout(Fn *fn, Blk *b, int t)
+{
+	Blk *c;
+	Phi *p;
+	Ins *i;
+	uint n, a;
+	int k;
+
+	for (n=0; n<fn->nblk; n++) {
+		c = fn->rpo[n];
+		for (p=c->phi; p; p=p->link)
+			for (a=0; a<p->narg; a++)
+				if (rtype(p->arg[a]) == RTmp && p->arg[a].val == t)
+					return 1;
+		if (c == b)
+			continue;
+		for (i=c->ins; i<&c->ins[c->nins]; i++)
+			for (k=0; k<2; k++)
+				if (rtype(i->arg[k]) == RTmp && i->arg[k].val == t)
+					return 1;
+		if (rtype(c->jmp.arg) == RTmp && c->jmp.arg.val == t)
+			return 1;
+	}
+	return 0;
+}
+
+/* the block is simple: only stores, loads, constant adds, copies and vector-able arithmetic, and no value
+ * of it is used outside it (the rewrite replaces the block's instructions) */
+static int
+slpsimple(Fn *fn, Blk *b)
+{
+	Ins *ins;
+
+	for (ins=b->ins; ins<&b->ins[b->nins]; ins++) {
+		int ok = ins->op == Onop || ins->op == Odbgloc || ins->op == Ocopy || ins->op == Oadd
+			|| ins->op == Ostorew || ins->op == Ostores || ins->op == Ostored
+			|| ins->op == Oloadsw || ins->op == Oload
+			|| (ins->op == Omul && ins->cls == Kw)
+			|| vecop(ins->op, ins->cls == Kw ? LW : ins->cls == Ks ? LS : ins->cls == Kd ? LD : LNone) != -1;
+		if (!ok)
+			return 0;
+		if (rtype(ins->to) == RTmp && usedout(fn, b, ins->to.val))
+			return 0;
+	}
+	return 1;
+}
+
+/* a block: SLP its one group of VF stores, if there is one */
+static int
+slpblock(Fn *fn, Blk *b)
+{
+	Slp s;
+	Ins *ins, *st[SLPN], *sj, *bd;
+	Ref vals[8], base0, bj;
+	int64_t o0, oj;
+	int nst, kind, size, n, i, j, k, inplace, nkind;
+
+	memset(&s, 0, sizeof s);
+	s.b = b;
+	s.def = emalloc(fn->ntmp * sizeof s.def[0]);
+	for (ins=b->ins; ins<&b->ins[b->nins]; ins++)
+		if (rtype(ins->to) == RTmp)
+			s.def[ins->to.val] = ins;
+	if (!slpsimple(fn, b))
+		goto no;
+	nst = 0;
+	for (ins=b->ins; ins<&b->ins[b->nins]; ins++)
+		if (ins->op == Ostorew || ins->op == Ostores || ins->op == Ostored)
+			st[nst++] = ins;
+	for (kind=LW; kind<=LD; kind++) {
+		n = kind == LD ? 2 : 4;
+		size = kind == LD ? 8 : 4;
+		nkind = 0;
+		for (i=0; i<nst; i++)
+			if ((st[i]->op == Ostorew ? LW : st[i]->op == Ostores ? LS : LD) == kind)
+				nkind++;
+		if (nkind < n)
+			continue;
+		for (i=0; i<nst; i++) {
+			int lk = st[i]->op == Ostorew ? LW : st[i]->op == Ostores ? LS : LD;
+
+			if (lk != kind)
+				continue;
+			base0 = slpaddr(fn, &s, st[i]->arg[1], &o0);
+			/* the base may be defined here by a copy of a value from outside (the ABI's): that copy is kept */
+			bd = 0;
+			if (!slpbase(&s, base0))
+				continue;
+			if (rtype(base0) == RTmp && s.def[base0.val])
+				bd = s.def[base0.val];
+			/* the stores of the group: at o0 + j*size, one each */
+			for (j=0; j<n; j++) {
+				sj = 0;
+				for (k=0; k<nst; k++) {
+					int ck = st[k]->op == Ostorew ? LW : st[k]->op == Ostores ? LS : LD;
+
+					if (ck != kind)
+						continue;
+					bj = slpaddr(fn, &s, st[k]->arg[1], &oj);
+					if (req(bj, base0) && oj == o0 + j*size) {
+						sj = st[k];
+						break;
+					}
+				}
+				if (!sj)
+					break;
+				vals[j] = sj->arg[0];
+			}
+			if (j < n)
+				continue;
+			/* the tree of the values; the block has no other stores or loads than the tree's */
+			s.nodes = 0;
+			s.nld = 0;
+			if (!slpok(fn, &s, vals, n, kind, 0))
+				continue;
+			{
+				int nmem = 0;
+				for (ins=b->ins; ins<&b->ins[b->nins]; ins++) {
+					if (ins->op == Ostorew || ins->op == Ostores || ins->op == Ostored || ins->op == Oloadsw || ins->op == Oload)
+						nmem++;
+				}
+				if (nmem != n + n * s.nld)
+					continue;
+			}
+			/* the group's stores must be the block's, and its loads the tree's: the sizes already agree.
+			 * Overlap: a load region other than the store's own must be in another base, or be tested. */
+			inplace = 1;
+			for (k=0; k<s.nld; k++) {
+				if (req(s.lbase[k], base0) && s.loff[k] == o0 && s.lsz[k] == size)
+					continue;
+				if (req(s.lbase[k], base0))
+					goto no;	/* the same base at another region: overlap is not tested */
+				inplace = 0;
+			}
+			if (!inplace)
+				goto no;	/* the run-time test is not done yet */
+			/* the block becomes the tree: its values' addresses are rebuilt, its instructions replaced */
+			nib = 0;
+			if (bd)
+				push(bd->op, bd->cls, bd->to, bd->arg[0], bd->arg[1]);
+			/* the copies into fixed registers (the return value) are kept, as the block's last effects */
+			for (ins=b->ins; ins<&b->ins[b->nins]; ins++)
+				if (rtype(ins->to) == RTmp && ins->to.val < Tmp0) {
+					if (ins->op != Ocopy || (rtype(ins->arg[0]) == RTmp && s.def[ins->arg[0].val]))
+						goto no;
+					push(ins->op, ins->cls, ins->to, ins->arg[0], ins->arg[1]);
+				}
+			{
+				Ref v = slpemit(fn, &s, vals, n, kind);
+				Ref addr = base0;
+				if (o0) {
+					addr = newtmp("vec", Kl, fn);
+					push(Oadd, Kl, addr, base0, getcon(o0, fn));
+				}
+				push(Ovecstore, Kw, R, v, addr);
+			}
+			vgrow(&b->ins, nib);
+			memmove(b->ins, ib, nib * sizeof ib[0]);
+			b->nins = nib;
+			free(s.def);
+			return 1;
+		}
+	}
+no:
+	free(s.def);
+	return 0;
+}
+
 void
 vec(Fn *fn)
 {
@@ -1657,6 +2002,11 @@ vec(Fn *fn)
 		free(lp.inb);
 		free(lp.map);
 		free(lp.redof);
+	}
+	/* straight-line code, block by block (SLP) */
+	for (n=0; n<fn->nblk; n++) {
+		filluse(fn);
+		slpblock(fn, fn->rpo[n]);
 	}
 	vfree(ib);
 	ib = 0;
