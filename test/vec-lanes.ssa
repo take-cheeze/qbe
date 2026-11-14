@@ -1,0 +1,147 @@
+export
+function w $iadd(l %a, l %b, w %k, w %n) {
+@start
+@head
+	%i =w phi @start 0, @latch %i2
+	%c =w csltw %i, %n
+	jnz %c, @body, @done
+@body
+	%t =l extsw %i
+	%o =l mul %t, 4
+	%pb =l add %b, %o
+	%x =w loadsw %pb
+	%y =w add %x, %k
+	%pa =l add %a, %o
+	storew %y, %pa
+	jmp @latch
+@latch
+	%i2 =w add %i, 1
+	jmp @head
+@done
+	ret 0
+}
+
+export
+function w $dscale(l %a, l %b, w %n) {
+@start
+@head
+	%i =w phi @start 0, @latch %i2
+	%c =w csltw %i, %n
+	jnz %c, @body, @done
+@body
+	%t =l extsw %i
+	%o =l mul %t, 8
+	%pb =l add %b, %o
+	%x =d loadd %pb
+	%y =d mul %x, d_2.5
+	%pa =l add %a, %o
+	stored %y, %pa
+	jmp @latch
+@latch
+	%i2 =w add %i, 1
+	jmp @head
+@done
+	ret 0
+}
+
+export
+function w $dinc(l %a, w %n) {
+@start
+@head
+	%i =w phi @start 0, @latch %i2
+	%c =w csltw %i, %n
+	jnz %c, @body, @done
+@body
+	%t =l extsw %i
+	%o =l mul %t, 8
+	%pa =l add %a, %o
+	%x =d loadd %pa
+	%y =d add %x, d_1.0
+	stored %y, %pa
+	jmp @latch
+@latch
+	%i2 =w add %i, 1
+	jmp @head
+@done
+	ret 0
+}
+
+export
+function w $fadd(l %a, l %b, l %c, w %n) {
+@start
+@head
+	%i =w phi @start 0, @latch %i2
+	%c0 =w csltw %i, %n
+	jnz %c0, @body, @done
+@body
+	%t =l extsw %i
+	%o =l mul %t, 4
+	%pb =l add %b, %o
+	%x =s loads %pb
+	%pc =l add %c, %o
+	%y =s loads %pc
+	%z =s add %x, %y
+	%pa =l add %a, %o
+	stores %z, %pa
+	jmp @latch
+@latch
+	%i2 =w add %i, 1
+	jmp @head
+@done
+	ret
+}
+
+# >>> driver
+# #include <stdio.h>
+# #include <string.h>
+# int iadd(int *, int *, int, int);
+# double dscale(double *, double *, int);
+# void dinc(double *, int);
+# void fadd(float *, float *, float *, int);
+# static int bad;
+# #define CHECK(c) do { if (!(c)) { bad++; printf("FAIL line %d\n", __LINE__); } } while (0)
+# int ib[40], ia[40];
+# double db[40], da[40];
+# float fa[40], fb[40], fc[40], fr[40];
+# int main() {
+# 	int n, i;
+# 	/* integer lanes with a broadcast invariant, every trip count around the vector width */
+# 	for (n = 0; n <= 13; n++) {
+# 		for (i = 0; i < 40; i++) { ib[i] = i * 7 - 3; ia[i] = -99; }
+# 		iadd(ia, ib, 5, n);
+# 		for (i = 0; i < 40; i++) {
+# 			int want = i < n ? ib[i] + 5 : -99;
+# 			CHECK(ia[i] == want);
+# 		}
+# 	}
+# 	/* double lanes with a constant */
+# 	for (n = 0; n <= 9; n++) {
+# 		for (i = 0; i < 40; i++) { db[i] = i * 0.5; da[i] = -1.0; }
+# 		dscale(da, db, n);
+# 		for (i = 0; i < 40; i++) CHECK(da[i] == (i < n ? db[i] * 2.5 : -1.0));
+# 	}
+# 	/* double in place (one base) */
+# 	for (n = 0; n <= 9; n++) {
+# 		for (i = 0; i < 40; i++) da[i] = i + 0.25;
+# 		dinc(da, n);
+# 		for (i = 0; i < 40; i++) CHECK(da[i] == i + 0.25 + (i < n ? 1.0 : 0.0));
+# 	}
+# 	/* float lanes, distinct arrays */
+# 	for (n = 0; n <= 13; n++) {
+# 		for (i = 0; i < 40; i++) { fb[i] = i * 1.5f; fc[i] = i * 0.25f; fr[i] = -7.0f; }
+# 		fadd(fr, fb, fc, n);
+# 		for (i = 0; i < 40; i++) CHECK(fr[i] == (i < n ? fb[i] + fc[i] : -7.0f));
+# 	}
+# 	/* overlapping arrays: the scalar loop's result, computed sequentially */
+# 	for (n = 1; n <= 12; n++) {
+# 		float ref[40];
+# 		for (i = 0; i < 40; i++) { fa[i] = i + 1.0f; fc[i] = 0.5f; }
+# 		memcpy(ref, fa, sizeof ref);
+# 		for (i = 0; i < n; i++) ref[i + 1] = ref[i] + fc[i];
+# 		fadd(fa + 1, fa, fc, n);
+# 		for (i = 0; i < 40; i++) CHECK(fa[i] == ref[i]);
+# 	}
+# 	printf("bad=%d\n", bad);
+# 	return bad != 0;
+# }
+# <<<

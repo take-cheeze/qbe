@@ -8,6 +8,7 @@ Target T;
 int nofp;
 int nounwind;
 int absaddr;
+int vectorize;
 static int code16;   /* -m16: i386 code run in real mode, as gcc -m16 makes it (.code16gcc) */
 char debug['Z'+1] = {
 	['P'] = 0, /* parsing */
@@ -105,6 +106,8 @@ func(Fn *fn)
 	simpl(fn);
 	fillcfg(fn);
 	filluse(fn);
+	if (vectorize)
+		vec(fn);
 	T.isel(fn);
 	fillcfg(fn);
 	filllive(fn);
@@ -146,7 +149,7 @@ main(int ac, char *av[])
 
 	T = Deftgt;
 	outf = stdout;
-	while ((c = getopt(ac, av, "hd:m:no:pt:UA")) != -1)
+	while ((c = getopt(ac, av, "hd:m:no:pt:UAV")) != -1)
 		switch (c) {
 		case 'd':
 			for (; *optarg; optarg++)
@@ -167,6 +170,9 @@ main(int ac, char *av[])
 			break;
 		case 'U':
 			nounwind = 1;
+			break;
+		case 'V':
+			vectorize = 1;
 			break;
 		case 'A':
 			absaddr = 1;
@@ -207,6 +213,7 @@ main(int ac, char *av[])
 			fprintf(hf, "\t%-11s output to file\n", "-o file");
 			fprintf(hf, "\t%-11s no floating-point registers in integer code\n", "-n");
 			fprintf(hf, "\t%-11s no unwind tables\n", "-U");
+			fprintf(hf, "\t%-11s vectorize simple loops (amd64_sysv, SSE; vec.c)\n", "-V");
 			fprintf(hf, "\t%-11s i386 code for real mode (.code16gcc, gcc's -m16)\n", "-m16");
 			fprintf(hf, "\t%-11s position independent (for a shared object):\n", "-p");
 			fprintf(hf, "\t%-11s thread-local symbols by initial exec\n", "");
