@@ -94,6 +94,8 @@ struct Loop {
 	int ivcls;	/* the class of i and the bound: Kw or Kl */
 	int cmpop;	/* the exit test: 0 lt, 1 le, 2 gt, 3 ge (signed) */
 	int64_t ivstep;	/* +1 for lt and le, -1 for gt and ge */
+	int ptr;	/* a pointer induction: the accesses are through i itself, stepping by unit bytes */
+	int64_t unit;	/* the bytes per iteration of i (1 for an index) */
 	int vf;		/* lanes per vector */
 	int nst;	/* stores */
 	uint nt;	/* fn->ntmp when the loop was found */
@@ -174,7 +176,7 @@ isidx(Loop *lp, Ref r)
 static int
 isadr(Loop *lp, Ref r)
 {
-	return rtype(r) == RTmp && lp->adr[r.val];
+	return rtype(r) == RTmp && (lp->adr[r.val] || (lp->ptr && lp->idx[r.val]));
 }
 
 /* a loop-invariant temporary of class k */
@@ -225,10 +227,13 @@ access(Loop *lp, Ref a, int size, int kind, int store, struct Stats *st)
 	Ref b;
 	int j;
 
-	if (!isadr(lp, a) || (lp->step[a.val] != size && lp->step[a.val] != 2*size))
+	if (!isadr(lp, a))
+		return 0;
+	if (lp->ptr ? (lp->step[a.val] != size && lp->step[a.val] != -size)
+	            : (lp->step[a.val] != size && lp->step[a.val] != 2*size))
 		return 0;
 	/* a stride-2 access covers the element and its neighbour: its base is then of size 2*size */
-	if (lp->step[a.val] == 2*size) {
+	if (!lp->ptr && lp->step[a.val] == 2*size) {
 		lp->strd[a.val] = 1;
 		lp->anystrd = 1;
 		size = 2*size;
@@ -585,12 +590,10 @@ latchstep(Fn *fn, Loop *lp, Ins *ins)
 
 	if (ins->cls != lp->ivcls || !req(ins->arg[0], lp->i) || !conint(fn, ins->arg[1], &c))
 		return 0;
-	if (ins->op == Oadd && c == 1)
-		return 1;
-	if (ins->op == Oadd && c == -1)
-		return -1;
-	if (ins->op == Osub && c == 1)
-		return -1;
+	if (ins->op == Oadd)
+		return c;
+	if (ins->op == Osub)
+		return -c;
 	return 0;
 }
 
@@ -757,6 +760,28 @@ findloop(Fn *fn, Blk *H, Loop *lp)
 	lp->ioff[lp->i.val] = 0;
 	if (lp->ivcls == Kw)
 		lp->lane[lp->i.val] = LW;	/* usable as a w lane (vector lanes iv + j) */
+	/* the mode: an index stepping by one, or a 64-bit pointer stepping by 4 or 8 bytes (its accesses are i itself) */
+	{
+		int64_t lc = 0;
+		for (k=0; k<lp->nbody && !lc; k++)
+			for (ins=lp->body[k]->ins; ins<&lp->body[k]->ins[lp->body[k]->nins]; ins++)
+				if (req(ins->to, lp->lat)) {
+					lc = latchstep(fn, lp, ins);
+					break;
+				}
+		if (lc == 1 || lc == -1) {
+			lp->ptr = 0;
+			lp->unit = 1;
+		} else if (lp->ivcls == Kl && (lc == 4 || lc == -4 || lc == 8 || lc == -8)) {
+			lp->ptr = 1;
+			lp->unit = lc < 0 ? -lc : lc;
+		} else
+			return rej(__LINE__);
+		if ((lc > 0) != (lp->ivstep > 0))
+			return rej(__LINE__);	/* the latch must go the way the exit test runs */
+		lp->step[lp->i.val] = lp->ptr ? lc : 1;
+		lp->adr[lp->i.val] = lp->ptr;
+	}
 	for (p=H->phi; p; p=p->link)
 		lp->inl[p->to.val] = 1;
 	for (k=0; k<lp->nbody; k++) {
@@ -787,7 +812,7 @@ findloop(Fn *fn, Blk *H, Loop *lp)
 			if (ins->op == Onop || ins->op == Odbgloc)
 				continue;
 			if (req(ins->to, lp->lat)) {
-				if (latchstep(fn, lp, ins) != lp->ivstep)
+				if (latchstep(fn, lp, ins) != lp->ivstep * lp->unit)
 					return rej(__LINE__);
 				found = 1;
 				continue;
@@ -858,8 +883,10 @@ findloop(Fn *fn, Blk *H, Loop *lp)
 	}
 	if (lp->idata && lp->vf != 4)
 		return rej(__LINE__);	/* the induction's lanes are four w lanes */
-	if (lp->anystrd && lp->ivstep < 0)
-		return rej(__LINE__);	/* the stride-2 windows are taken counting up only */
+	if (lp->anystrd && (lp->ivstep < 0 || lp->ptr))
+		return rej(__LINE__);	/* the stride-2 windows are taken counting up, and as indices only */
+	if (lp->ptr && lp->idata)
+		return rej(__LINE__);	/* the induction as a value is an index's */
 	/* a store and another access of its base: their distance in elements is 0, or at least VF */
 	for (k=0; k<(uint)lp->nacc; k++) {
 		int64_t d, sz;
@@ -1296,7 +1323,7 @@ build(Fn *fn, Loop *lp)
 		lp->map[lp->redph[k]->to.val] = lp->redva[k];
 	nib = 0;
 	if (!req(vb, iv))
-		push(Osub, lp->ivcls, vb, iv, getcon(lp->vf - 1, fn));
+		push(Osub, lp->ivcls, vb, iv, getcon((lp->vf - 1) * lp->unit, fn));
 	for (k=0; k<lp->nbody; k++) {
 		b = lp->body[k];
 		if (b == lp->join) {
@@ -1435,7 +1462,7 @@ build(Fn *fn, Loop *lp)
 	/* ivn = iv + VF; vin = vi + VF (the lanes); jmp Hv */
 	if (lp->idata)
 		push(lp->ivstep > 0 ? Ovecaddw : Ovecsubw, Kd, lp->vin, lp->vi, lp->vstep);
-	push(lp->ivstep > 0 ? Oadd : Osub, lp->ivcls, ivn, iv, getcon(lp->vf, fn));
+	push(lp->ivstep > 0 ? Oadd : Osub, lp->ivcls, ivn, iv, getcon(lp->vf * lp->unit, fn));
 	idup(Bv, ib, nib);
 	Bv->jmp.type = Jjmp;
 	Bv->s1 = Hv;
@@ -1529,6 +1556,7 @@ build(Fn *fn, Loop *lp)
 	/* the vector's lanes are in the loop when they all pass the exit test */
 	delta = lp->cmpop == 0 ? lp->vf : lp->cmpop == 1 ? lp->vf - 1
 		: lp->cmpop == 2 ? -lp->vf : -(lp->vf - 1);
+	delta *= lp->unit;
 	if (lp->anystrd)
 		delta += 1;	/* the last window's second half ends at element 2*(vb+VF)-1 */
 	push(Oadd, lp->ivcls, tt, iv, getcon(delta, fn));

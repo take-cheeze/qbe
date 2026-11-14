@@ -1,0 +1,61 @@
+# Pointer induction: the loop walks a pointer p from a to e, four bytes at a time (pfill updates each element
+# in place, psum sums them). The accesses are through p itself.
+
+export
+function w $pfill(l %a, l %e, w %k) {
+@start
+@head
+	%p =l phi @start %a, @latch %p2
+	%c =l csltl %p, %e
+	jnz %c, @body, @done
+@body
+	%y =w loadsw %p
+	%z =w add %y, %k
+	storew %z, %p
+	jmp @latch
+@latch
+	%p2 =l add %p, 4
+	jmp @head
+@done
+	ret 0
+}
+
+export
+function w $psum(l %a, l %e) {
+@start
+@head
+	%p =l phi @start %a, @latch %p2
+	%s =w phi @start 0, @latch %s2
+	%c =l csltl %p, %e
+	jnz %c, @body, @done
+@body
+	%y =w loadsw %p
+	%s2 =w add %s, %y
+	jmp @latch
+@latch
+	%p2 =l add %p, 4
+	jmp @head
+@done
+	ret %s
+}
+
+# >>> driver
+# #include <stdio.h>
+# void pfill(int *, int *, int);
+# int psum(int *, int *);
+# int A[80];
+# int main() {
+# 	int n, i, bad = 0;
+# 	for (n = 0; n <= 30; n++) {
+# 		int s = 0, k = 7;
+# 		for (i = 0; i < 80; i++) A[i] = i * 3 - 40;
+# 		for (i = 0; i < n; i++) s += A[i];
+# 		if (psum(A, A + n) != s) bad++;
+# 		for (i = 0; i < 80; i++) A[i] = i * 3 - 40;
+# 		pfill(A, A + n, k);
+# 		for (i = 0; i < 80; i++) if (A[i] != (i < n ? i * 3 - 40 + k : i * 3 - 40)) bad++;
+# 	}
+# 	printf("bad=%d\n", bad);
+# 	return bad != 0;
+# }
+# <<<
