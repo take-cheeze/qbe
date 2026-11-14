@@ -371,7 +371,7 @@ struct Tmp {
 	} width;
 	int visit;
 	uint gcmbid;
-	uint vec:1; /* vec.c: a vector value (class Kd, held in an xmm register; spilled in a 16-byte slot) */
+	uint vec:2; /* vec.c: a vector value (class Kd, held in an xmm register; spilled in a 16-byte slot), 1; or a 256-bit one (-Y: ymm, 32-byte slot), 2 */
 };
 
 struct Con {
@@ -408,6 +408,7 @@ struct Lnk {
 };
 
 struct Fn {
+	int widevec;	/* vec.c: a 256-bit vector (Tmp.vec 2) is in use: the Kd slots are 32 bytes */
 	Blk *start;
 	Blk *eh_lp;  /* the landing pad (a block labeled eh.lp): unwound calls of the function enter it */
 	Tmp *tmp;
@@ -489,6 +490,7 @@ extern int pic;
 extern int vectorize;  /* -V (nfcxx): vectorize simple loops (vec.c; amd64_sysv, SSE) */
 extern int vecremarks;  /* -R (nfcxx): vectorizer remarks on stderr (vec.c) */
 extern int vecassoc;   /* -F: vectorize float reductions, which reassociates them (vec.c) */
+extern int vecavx;     /* -Y: with -V, 256-bit (AVX2) vectors for simple int32 and float32 loops (vec.c; amd64_sysv, amd64_apple) */
 
 /* util.c */
 typedef enum {

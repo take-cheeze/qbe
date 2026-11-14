@@ -135,6 +135,18 @@ static struct {
 	{ Ovecfltd, Kd, "-cmppd $1, %1, %=" },
 	{ Ovecfled, Kd, "-cmppd $2, %1, %=" },
 	{ Ovecload8, Ka, "movq %M0, %=" },
+	{ Ovecload256, Ka, "vmovups %M0, %=" },
+	{ Ovecstore256, Ka, "vmovups %0, %M1" },
+	{ Ovecaddw256, Kd, "vpaddd %1, %0, %=" },
+	{ Ovecsubw256, Kd, "vpsubd %1, %0, %=" },
+	{ Ovecmulw256, Kd, "vpmulld %1, %0, %=" },
+	{ Ovecandw256, Kd, "vpand %1, %0, %=" },
+	{ Ovecorw256, Kd, "vpor %1, %0, %=" },
+	{ Ovecxorw256, Kd, "vpxor %1, %0, %=" },
+	{ Ovecadds256, Kd, "vaddps %1, %0, %=" },
+	{ Ovecsubs256, Kd, "vsubps %1, %0, %=" },
+	{ Ovecmuls256, Kd, "vmulps %1, %0, %=" },
+	{ Ovecdivs256, Kd, "vdivps %1, %0, %=" },
 	{ Ovecstore8, Ka, "movq %0, %M1" },
 	{ Ovecw2d, Kd, "cvtdq2pd %0, %=" },
 	{ Ovecd2w, Kd, "cvttpd2dq %0, %=" },
@@ -265,6 +277,9 @@ emitcon(Con *con, E *e)
 	}
 }
 
+/* the instruction being emitted works on 256-bit vectors (its xmm registers are ymm ones) */
+static int wideins;
+
 static char *
 regtoa(int reg, int sz)
 {
@@ -272,7 +287,7 @@ regtoa(int reg, int sz)
 
 	assert(reg <= XMM15);
 	if (reg >= XMM0) {
-		sprintf(buf, "xmm%d", reg-XMM0);
+		sprintf(buf, wideins ? "ymm%d" : "xmm%d", reg-XMM0);
 		return buf;
 	} else
 		return rname[reg][sz];
@@ -519,6 +534,10 @@ emitins(Ins i, E *e)
 	Con *con;
 	char *sym;
 
+	/* the 256-bit vector ops, and the copies of vectors in a function that has them (its slots are 32 bytes) */
+	wideins = (i.op >= Ovecbcasts256 && i.op <= Ovecdivs256)
+		|| (i.op == Ocopy && i.cls == Kd && e->fn->widevec);
+
 	switch (i.op) {
 	default:
 		if (isxsel(i.op))
@@ -597,6 +616,22 @@ emitins(Ins i, E *e)
 		emitf("movsd %D0, %=", &i, e);
 		emitf("pshufd $68, %=, %=", &i, e);
 		break;
+	case Ovecbcasts256: {
+		/* the float to all eight lanes: the source is an xmm (or a slot), the destination a ymm */
+		char fmt[64], d[8];
+
+		wideins = 1;
+		strcpy(d, regtoa(i.to.val, SLong));
+		wideins = 0;
+		sprintf(fmt, "vbroadcastss %%S0, %%%%%s", d);
+		emitf(fmt, &i, e);
+		break;
+	}
+	case Ovecbcastw256:
+		/* the scalar into the low lane of xmm15, then broadcast it to all eight lanes of the ymm */
+		emitf("vmovd %W0, %%xmm15", &i, e);
+		emitf("vpbroadcastd %%xmm15, %=", &i, e);
+		break;
 	case Onop:
 		/* just do nothing for nops, they are inserted
 		 * by some passes */
@@ -665,14 +700,23 @@ emitins(Ins i, E *e)
 		&& (rtype(i.to) == RSlot || isreg(i.to))) {
 			/* a double in a slot (spill.c gives it 16 bytes) or a vector: the whole register moves,
 			 * movsd would keep only the low lane */
+			/* a 256-bit copy (wideins) moves 32 bytes: the slots of such a function are 32 bytes too */
+			char *mu = wideins ? "vmovups" : "movups";
+			char *ma = wideins ? "vmovaps" : "movaps";
+			char fmt[32];
 			if (t0 == RSlot && rtype(i.to) == RSlot) {
 				i.arg[1] = TMP(XMM0+15);
-				emitf("movups %0, %1", &i, e);
-				emitf("movups %1, %=", &i, e);
-			} else if (isreg(i.to) && isreg(i.arg[0]))
-				emitf("movaps %0, %=", &i, e);
-			else
-				emitf("movups %0, %=", &i, e);
+				sprintf(fmt, "%s %%0, %%1", mu);
+				emitf(fmt, &i, e);
+				sprintf(fmt, "%s %%1, %%=", mu);
+				emitf(fmt, &i, e);
+			} else if (isreg(i.to) && isreg(i.arg[0])) {
+				sprintf(fmt, "%s %%0, %%=", ma);
+				emitf(fmt, &i, e);
+			} else {
+				sprintf(fmt, "%s %%0, %%=", mu);
+				emitf(fmt, &i, e);
+			}
 			break;
 		}
 		if (i.cls == Kl
@@ -973,8 +1017,11 @@ amd64_sysv_emitfn(Fn *fn, FILE *f)
 				e->tail = 1;
 				emitins(*last, e);
 				e->tail = 0;
-			} else
+			} else {
+				if (e->fn->widevec)
+					fputs("\tvzeroupper\n", f);	/* the upper halves of the ymm registers are not the callee's */
 				fputs("\tret\n", f);
+			}
 			if (unw)
 				fputs("\t.cfi_restore_state\n", f);
 			break;
@@ -1101,6 +1148,8 @@ amd64_winabi_emitfn(Fn *fn, FILE *f)
 				fprintf(f,
 					"\taddq $%"PRIu64", %%rsp\n",
 					e->fsz);
+			if (e->fn->widevec)
+				fputs("\tvzeroupper\n", f);
 			fputs("\tret\n", f);
 			break;
 		case Jjmp:

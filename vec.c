@@ -56,6 +56,8 @@
 
 #include "all.h"
 
+static int wideok(void);
+
 /* lane kinds of a vector value */
 enum {
 	LNone,
@@ -97,6 +99,7 @@ struct Loop {
 	int ptr;	/* a pointer induction: the accesses are through i itself, stepping by unit bytes */
 	int64_t unit;	/* the bytes per iteration of i (1 for an index) */
 	int vf;		/* lanes per vector */
+	int wide;	/* -Y: 256-bit vectors, 8 lanes of int32 or float32 (AVX2) */
 	int nst;	/* stores */
 	uint nt;	/* fn->ntmp when the loop was found */
 	char *inl;	/* per temporary: defined in the loop */
@@ -730,6 +733,7 @@ findloop(Fn *fn, Blk *H, Loop *lp)
 	lp->lat = ph->arg[1-ia];
 	lp->n = cmp->arg[1];
 	lp->vf = 0;
+	lp->wide = 0;
 	lp->nbref = 0;
 	lp->nacc = 0;
 	nt = fn->ntmp;
@@ -860,6 +864,11 @@ findloop(Fn *fn, Blk *H, Loop *lp)
 	if (st.hasd && st.hasws && !st.conv)
 		return rej(__LINE__);	/* mixed widths only through the conversions */
 	lp->vf = st.hasd ? 2 : 4;
+	/* -Y: 256-bit vectors (8 int32 or float32 lanes) for a loop of element-wise ops only: no double, conversion,
+	 * reduction, condition, mask, stride-2 access, or induction as data (the lane-index buffer is four lanes) */
+	lp->wide = vecavx && wideok() && !st.hasd && !st.conv && !lp->nred && !lp->hascond && !lp->anystrd && !lp->idata;
+	if (lp->wide)
+		lp->vf = 8;
 	lp->nst = st.nst;
 	for (t=Tmp0; t<nt; t++)
 		if (lp->lane[t] == LM)
@@ -941,11 +950,44 @@ findloop(Fn *fn, Blk *H, Loop *lp)
 /* build: the instructions of the block being made, in order (idup copies them) */
 static Ins *ib;
 static uint nib;
+static int vecw;	/* build: the loop being built is wide (lp->wide): its vector ops are the 256-bit ones */
+
+/* the targets with the 256-bit forms: the amd64 SysV ABI (and Apple's), whose xmm registers are all caller-saved */
+static int
+wideok(void)
+{
+	return strcmp(T.name, "amd64_sysv") == 0 || strcmp(T.name, "amd64_apple") == 0;
+}
+
+/* the 256-bit form of a vector op of a wide loop */
+static int
+wideop(int op)
+{
+	switch (op) {
+	case Ovecload:   return Ovecload256;
+	case Ovecstore: return Ovecstore256;
+	case Ovecbcastw: return Ovecbcastw256;
+	case Ovecbcasts: return Ovecbcasts256;
+	case Ovecaddw:  return Ovecaddw256;
+	case Ovecsubw:  return Ovecsubw256;
+	case Ovecmulw:  return Ovecmulw256;
+	case Ovecandw:  return Ovecandw256;
+	case Ovecorw:   return Ovecorw256;
+	case Ovecxorw:  return Ovecxorw256;
+	case Ovecadds:  return Ovecadds256;
+	case Ovecsubs:  return Ovecsubs256;
+	case Ovecmuls:  return Ovecmuls256;
+	case Ovecdivs:  return Ovecdivs256;
+	}
+	return op;
+}
 
 static void
 push(int op, int cls, Ref to, Ref a0, Ref a1)
 {
 	vgrow(&ib, nib+1);
+	if (vecw)
+		op = wideop(op);
 	ib[nib++] = (Ins){.op = op, .cls = cls, .to = to, .arg = {a0, a1}};
 }
 
@@ -955,7 +997,9 @@ newvec(Fn *fn)
 	Ref v;
 
 	v = newtmp("vec", Kd, fn);
-	fn->tmp[v.val].vec = 1;
+	fn->tmp[v.val].vec = vecw ? 2 : 1;
+	if (vecw)
+		fn->widevec = 1;
 	return v;
 }
 
@@ -987,6 +1031,12 @@ mulw(Fn *fn, Ref a, Ref b)
 {
 	Ref t1, as, bs, t2, x, y, r;
 
+	if (vecw) {
+		/* 32-bit lanes: vpmulld */
+		r = newvec(fn);
+		push(Ovecmulw, Kd, r, a, b);
+		return r;
+	}
 	t1 = newvec(fn);
 	push(Ovecmuludq, Kd, t1, a, b);
 	as = newvec(fn);
@@ -1984,7 +2034,9 @@ vec(Fn *fn)
 				fprintf(stderr, "vec: %s: loop at @%d vectorized: %d lanes, %d bases, %d reductions%s%s\n",
 					fn->name, cand[k]->id, lp.vf, lp.nbref, lp.nred,
 					lp.ptr ? ", pointer" : "", lp.hascond ? ", if" : "");
+			vecw = lp.wide;
 			build(fn, &lp);
+			vecw = 0;
 			fillcfg(fn);
 			filluse(fn);
 			if (debug['V'])

@@ -485,6 +485,25 @@ Emit:
 	case Ovecstore:
 		seladdr(&i.arg[1], tn, fn);
 		goto Emit;
+	case Ovecload256:
+		seladdr(&i.arg[0], tn, fn);
+		goto Emit;
+	case Ovecstore256:
+		seladdr(&i.arg[1], tn, fn);
+		goto Emit;
+	case Ovecbcastw256:
+	case Ovecbcasts256:
+	case Ovecaddw256:
+	case Ovecsubw256:
+	case Ovecmulw256:
+	case Ovecandw256:
+	case Ovecorw256:
+	case Ovecxorw256:
+	case Ovecadds256:
+	case Ovecsubs256:
+	case Ovecmuls256:
+	case Ovecdivs256:
+		goto Emit;
 	case Ovecbcastw:
 	case Ovecbcasts:
 	case Ovecbcastd:

@@ -280,6 +280,21 @@ O(vecmuludq, T(e,e,e,d, e,e,e,d), F(0,0,0,1,0,0,0,0,0,0)) X(0,0,0) V(0)   /* pmu
 O(vecsrlq32, T(e,e,e,d, e,e,e,e), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)   /* psrlq 32: each 64-bit lane shifted down */
 O(vecpack02, T(e,e,e,d, e,e,e,e), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)   /* pshufd 0x88: lanes 0 and 2 to the low half */
 O(vecunpckl32, T(e,e,e,d, e,e,e,d), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0) /* punpckldq: interleave the low halves */
+/* 256-bit (AVX2) forms of the vector ops a plain int32 or float32 loop uses: vec.c emits these for -Y */
+O(vecbcasts256, T(e,e,e,d, e,e,e,s), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0) /* vbroadcastss: a float to all eight lanes */
+O(vecload256,  T(e,e,e,m, e,e,e,e), F(0,0,0,0,0,0,0,0,0,1)) X(0,0,1) V(0)  /* vmovups: 32 bytes */
+O(vecstore256, T(d,e,e,e, m,e,e,e), F(0,0,0,0,0,0,0,0,0,1)) X(0,0,1) V(0)  /* vmovups: 32 bytes */
+O(vecbcastw256, T(e,e,e,d, e,e,e,w), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0) /* vpbroadcastd of a word */
+O(vecaddw256, T(e,e,e,d, e,e,e,d), F(0,0,0,1,0,0,0,0,0,0)) X(0,0,0) V(0)  /* vpaddd */
+O(vecsubw256, T(e,e,e,d, e,e,e,d), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)  /* vpsubd */
+O(vecmulw256, T(e,e,e,d, e,e,e,d), F(0,0,0,1,0,0,0,0,0,0)) X(0,0,0) V(0)  /* vpmulld */
+O(vecandw256, T(e,e,e,d, e,e,e,d), F(0,0,0,1,0,0,0,0,0,0)) X(0,0,0) V(0)  /* vpand */
+O(vecorw256, T(e,e,e,d, e,e,e,d), F(0,0,0,1,0,0,0,0,0,0)) X(0,0,0) V(0)   /* vpor */
+O(vecxorw256, T(e,e,e,d, e,e,e,d), F(0,0,0,1,0,0,0,0,0,0)) X(0,0,0) V(0)  /* vpxor */
+O(vecadds256, T(e,e,e,d, e,e,e,d), F(0,0,0,1,0,0,0,0,0,0)) X(0,0,0) V(0)  /* vaddps */
+O(vecsubs256, T(e,e,e,d, e,e,e,d), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)  /* vsubps */
+O(vecmuls256, T(e,e,e,d, e,e,e,d), F(0,0,0,1,0,0,0,0,0,0)) X(0,0,0) V(0)  /* vmulps */
+O(vecdivs256, T(e,e,e,d, e,e,e,d), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)  /* vdivps */
 
 #undef T
 #undef X
