@@ -621,6 +621,18 @@ emitins(Ins i, E *e)
 		emitf("movsd %D0, %=", &i, e);
 		emitf("pshufd $68, %=, %=", &i, e);
 		break;
+	case Ovecfold256: {
+		/* the high 128 bits of the ymm source into the xmm destination: names by hand (the source is wide) */
+		char fmt[64], src[8], dst[8];
+
+		wideins = 1;
+		strcpy(src, regtoa(i.arg[0].val, SLong));
+		wideins = 0;
+		strcpy(dst, regtoa(i.to.val, SLong));
+		sprintf(fmt, "vextracti128 $1, %%%%%s, %%%%%s", src, dst);
+		emitf(fmt, &i, e);
+		break;
+	}
 	case Ovecbcasts256: {
 		/* the float to all eight lanes: the source is an xmm (or a slot), the destination a ymm */
 		char fmt[64], d[8];
