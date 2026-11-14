@@ -84,6 +84,13 @@ fillcost(Fn *fn)
 		}
 		tmpuse(b->jmp.arg, 1, n, fn);
 	}
+	for (t=fn->tmp; t-fn->tmp < fn->ntmp; t++)
+		t->nlive = 0;
+	for (b=fn->start; b; b=b->link) {
+		int r;
+		for (r=Tmp0; bsiter(b->in, &r); r++)
+			fn->tmp[r].nlive++;
+	}
 	if (debug['S']) {
 		fprintf(stderr, "\n> Spill costs:\n");
 		for (n=Tmp0; n<fn->ntmp; n++)
@@ -103,13 +110,22 @@ static int slot8; /* ditto, 8 bytes */
 static int wideslot; /* the function has 256-bit vectors: a Kd slot is 32 bytes */
 static BSet mask[2][1]; /* class masks */
 
+/* the spill priority of a temporary: its cost per block it is live in (a long live range costs a register for longer) */
+static unsigned long long
+spillkey(int t)
+{
+	if (t < Tmp0)
+		return ULLONG_MAX;
+	return (unsigned long long)tmp[t].cost * 1024 / (tmp[t].nlive + 1);
+}
+
 static int
 tcmp0(const void *pa, const void *pb)
 {
-	uint ca, cb;
+	unsigned long long ca, cb;
 
-	ca = tmp[*(int *)pa].cost;
-	cb = tmp[*(int *)pb].cost;
+	ca = spillkey(*(int *)pa);
+	cb = spillkey(*(int *)pb);
 	return (cb < ca) ? -1 : (cb > ca);
 }
 
