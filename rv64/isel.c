@@ -181,7 +181,7 @@ isvecop(int op)
 	case Ovecaddw: case Ovecsubw: case Ovecmulw: case Ovecandw: case Ovecorw: case Ovecxorw:
 	case Ovecadds: case Ovecsubs: case Ovecmuls: case Ovecdivs:
 	case Ovecceqw: case Ovecgtw: case Ovecandn: case Ovecfeqs: case Ovecflts: case Ovecfles:
-	case Ovecloadst: case Ovecstorest:
+	case Ovecloadst: case Ovecstorest: case Ovecload8: case Ovecstore8: case Ovecw2d: case Ovecd2w:
 	case Ovecaddd: case Ovecsubd: case Ovecmuld: case Ovecdivd: case Ovecbcastd:
 	case Ovecfeqd: case Ovecfltd: case Ovecfled:
 		return 1;
@@ -210,9 +210,9 @@ sel(Ins i, Fn *fn)
 		 * (an alloca's), which fixarg turns into its address */
 		emiti(i);
 		i0 = curi;
-		if (i.op == Ovecload || i.op == Ovecloadst)
+		if (i.op == Ovecload || i.op == Ovecloadst || i.op == Ovecload8)
 			fixarg(&i0->arg[0], Kl, i0, fn);
-		if (i.op == Ovecstore || i.op == Ovecstorest)
+		if (i.op == Ovecstore || i.op == Ovecstorest || i.op == Ovecstore8)
 			fixarg(&i0->arg[1], Kl, i0, fn);
 		return;
 	}

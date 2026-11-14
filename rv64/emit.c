@@ -429,6 +429,25 @@ emitins(Ins *i, Fn *fn, FILE *f)
 		fprintf(f, "\tvxor.vi v31, v%d, -1\n", VREG(i->arg[0]));
 		fprintf(f, "\tvand.vv v%d, v31, v%d\n", VREG(i->to), VREG(i->arg[1]));
 		break;
+	case Ovecload8:		/* two int lanes: 8 bytes, so vl=2 */
+		fputs("\tvsetivli zero, 2, e32, m1, ta, ma\n", f);
+		fprintf(f, "\tvle32.v v%d, (%s)\n", VREG(i->to), vecaddr(i->arg[0], fn, f));
+		break;
+	case Ovecstore8:
+		fputs("\tvsetivli zero, 2, e32, m1, ta, ma\n", f);
+		fprintf(f, "\tvse32.v v%d, (%s)\n", VREG(i->arg[0]), vecaddr(i->arg[1], fn, f));
+		break;
+	case Ovecw2d:		/* two int lanes to two doubles: sign-extend to 64 bits, then convert */
+		vsetvl64(f);
+		fprintf(f, "\tvsext.vf2 v31, v%d\n", VREG(i->arg[0]));	/* a widening op may not overlap its source */
+		fprintf(f, "\tvfcvt.f.x.v v%d, v31\n", VREG(i->to));
+		break;
+	case Ovecd2w:		/* two doubles to two int lanes, truncated: convert to 64 bits, then narrow */
+		vsetvl64(f);
+		fprintf(f, "\tvfcvt.rtz.x.f.v v31, v%d\n", VREG(i->arg[0]));
+		fputs("\tvsetivli zero, 2, e32, mf2, ta, ma\n", f);	/* the narrowing source is one register: the destination is half */
+		fprintf(f, "\tvnsrl.wi v%d, v31, 0\n", VREG(i->to));
+		break;
 	case Ovecloadst:	/* the even elements: an 8-byte stride from the address (t6 holds the stride) */
 		vsetvl(f);
 		fprintf(f, "\tli t6, 8\n");
