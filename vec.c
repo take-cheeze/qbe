@@ -915,7 +915,7 @@ findloop(Fn *fn, Blk *H, Loop *lp)
 		/* a constant bound is the trip count only for a count up from 0 (a down count's bound is not) */
 		if (lp->ivstep > 0 && rtype(lp->n) == RCon && conint(fn, lp->n, &cst) && cst < 2 * lp->vf)
 			return rej(__LINE__);	/* too few iterations for a vector loop */
-		if (vc > sc * lp->vf) {
+		if (!veccost && vc > sc * lp->vf) {
 			if (debug['V'])
 				fprintf(stderr, "vec: %s: not profitable: vector cost %lld, scalar %lld x %d lanes\n",
 					fn->name, (long long)vc, (long long)sc, lp->vf);
