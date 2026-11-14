@@ -153,6 +153,13 @@ static struct {
 	{ Ovecfeqs256, Kd, "vcmpps $0, %1, %0, %=" },
 	{ Ovecflts256, Kd, "vcmpps $1, %1, %0, %=" },
 	{ Ovecfles256, Kd, "vcmpps $2, %1, %0, %=" },
+	{ Ovecaddd256, Kd, "vaddpd %1, %0, %=" },
+	{ Ovecsubd256, Kd, "vsubpd %1, %0, %=" },
+	{ Ovecmuld256, Kd, "vmulpd %1, %0, %=" },
+	{ Ovecdivd256, Kd, "vdivpd %1, %0, %=" },
+	{ Ovecfeqd256, Kd, "vcmppd $0, %1, %0, %=" },
+	{ Ovecfltd256, Kd, "vcmppd $1, %1, %0, %=" },
+	{ Ovecfled256, Kd, "vcmppd $2, %1, %0, %=" },
 	{ Ovecstore8, Ka, "movq %0, %M1" },
 	{ Ovecw2d, Kd, "cvtdq2pd %0, %=" },
 	{ Ovecd2w, Kd, "cvttpd2dq %0, %=" },
@@ -544,7 +551,7 @@ emitins(Ins i, E *e)
 	char *sym;
 
 	/* the 256-bit vector ops, and the copies of vectors in a function that has them (its slots are 32 bytes) */
-	wideins = (i.op >= Ovecbcasts256 && i.op <= Ovecfles256)
+	wideins = (i.op >= Ovecbcasts256 && i.op <= Ovecfled256)
 		|| (i.op == Ocopy && i.cls == Kd && e->fn->widevec
 		    && (isreg(i.to) || rtype(i.to) == RSlot)
 		    && (isreg(i.arg[0]) || rtype(i.arg[0]) == RSlot));
@@ -636,6 +643,17 @@ emitins(Ins i, E *e)
 		wideins = 0;
 		strcpy(dst, regtoa(i.to.val, SLong));
 		sprintf(fmt, "vextracti128 $1, %%%%%s, %%%%%s", src, dst);
+		emitf(fmt, &i, e);
+		break;
+	}
+	case Ovecbcastd256: {
+		/* the double to all four lanes (vbroadcastsd takes an xmm or a slot) */
+		char fmt[64], d[8];
+
+		wideins = 1;
+		strcpy(d, regtoa(i.to.val, SLong));
+		wideins = 0;
+		sprintf(fmt, "vbroadcastsd %%D0, %%%%%s", d);
 		emitf(fmt, &i, e);
 		break;
 	}
