@@ -66,7 +66,7 @@ enum {
 };
 
 enum {
-	NBREF = 8,	/* the distinct bases of a loop */
+	NBREF = 16,	/* the distinct bases of a loop */
 	NRED = 4,	/* the reductions of a loop */
 	NACC = 32,	/* the element accesses of a loop */
 	NBODY = 32,	/* the blocks of a loop body */
@@ -137,6 +137,8 @@ struct Loop {
 };
 
 static int lanecmp(int op);
+static int flanecmp(int op);
+static int fcmpcls(int op);
 static int issel0(Fn *fn, int tn);
 
 struct Stats {
@@ -417,17 +419,19 @@ classify(Fn *fn, Loop *lp, Ins *ins, struct Stats *st)
 		return 1;
 	}
 	/* the mask of the if: the lanes' comparison (only the jnz or a sel0 uses it) */
-	if (tn >= 0 && lanecmp(ins->op) >= 0 && ins->cls == Kw && fn->tmp[tn].nuse == 1 &&
+	if (tn >= 0 && (lanecmp(ins->op) >= 0 || fcmpcls(ins->op) >= 0) && fn->tmp[tn].nuse == 1 &&
 	    (lp->hascond ? req(to, lp->cond) : issel0(fn, tn))) {
-		if (lanecmp(ins->op) < 0 || ins->cls != Kw || fn->tmp[tn].nuse != 1)
+		int ck = fcmpcls(ins->op) >= 0 ? fcmpcls(ins->op) : Kw;
+		kind = ck == Kw ? LW : ck == Ks ? LS : LD;
+		if ((ck == Kw ? lanecmp(ins->op) : flanecmp(ins->op)) < 0)
 			return 0;
 		nlane = 0;
 		a[0] = a0;
 		a[1] = a1;
 		for (j=0; j<2; j++) {
-			if (rtype(a[j]) == RTmp && lp->lane[a[j].val] == LW)
+			if (rtype(a[j]) == RTmp && lp->lane[a[j].val] == kind)
 				nlane++;
-			else if (isinv(fn, lp, a[j], Kw) || (rtype(a[j]) == RCon && conint(fn, a[j], &c)))
+			else if (isinv(fn, lp, a[j], ck) || (rtype(a[j]) == RCon && conint(fn, a[j], &c)))
 				;
 			else
 				return 0;
@@ -521,6 +525,31 @@ classifyjoin(Fn *fn, Loop *lp, struct Stats *st)
 			st->hasws = 1;
 	}
 	return 1;
+}
+
+/* a float comparison (ordered): its kind as for lanecmp, or -1 */
+static int
+flanecmp(int op)
+{
+	switch (op) {
+	case Oceqs: case Oceqd: return CEq;
+	case Oclts: case Ocltd: return CLt;
+	case Ocles: case Ocled: return CLe;
+	case Ocgts: case Ocgtd: return CGt;
+	case Ocges: case Ocged: return CGe;
+	}
+	return -1;
+}
+
+/* the operand class of a float compare (Ks or Kd by its name), or -1 */
+static int
+fcmpcls(int op)
+{
+	switch (op) {
+	case Oceqs: case Oclts: case Ocles: case Ocgts: case Ocges: return Ks;
+	case Oceqd: case Ocltd: case Ocled: case Ocgtd: case Ocged: return Kd;
+	}
+	return -1;
 }
 
 /* a comparison whose only use is the sel0 that ifopt makes of a select */
@@ -791,6 +820,42 @@ findloop(Fn *fn, Blk *H, Loop *lp)
 	for (t=Tmp0; t<nt; t++)
 		if (lp->lane[t] == LM)
 			lp->nmask++;
+	/* the cost model: the scalar iteration (per lane) against the vector one, with the vector loop's
+	 * overhead and the runtime overlap tests; and no vector loop for a constant bound under two vectors */
+	{
+		int64_t sc = 2, vc = 4, cst;
+
+		for (k=0; k<lp->nbody; k++) {
+			b = lp->body[k];
+			for (ins=b->ins; ins<&b->ins[b->nins]; ins++) {
+				if (ins->op == Onop || ins->op == Odbgloc || req(ins->to, lp->lat))
+					continue;
+				sc++;
+				if (ins->op == Omul && ins->cls == Kw)
+					vc += 7;	/* the SSE2 sequence (mulw) */
+				else if (ins->op == Osel1)
+					vc += 3;
+				else if ((isload(ins->op) || ins->op == Oloadsw) && isadr(lp, ins->arg[0]) && lp->strd[ins->arg[0].val])
+					vc += 4;	/* two loads and a shuffle */
+				else if (isstore(ins->op) && isadr(lp, ins->arg[1]) && lp->strd[ins->arg[1].val])
+					vc += 8;	/* the merge with the odd lanes */
+				else
+					vc += 1;
+			}
+		}
+		if (lp->nst > 0 && lp->nbref > 1)
+			vc += 4 * lp->nbref * (lp->nbref - 1);	/* the runtime overlap tests */
+		if (lp->hascond)
+			vc += 2;
+		if (rtype(lp->n) == RCon && conint(fn, lp->n, &cst) && cst < 2 * lp->vf)
+			return rej(__LINE__);	/* too few iterations for a vector loop */
+		if (vc > sc * lp->vf) {
+			if (debug['V'])
+				fprintf(stderr, "vec: %s: not profitable: vector cost %lld, scalar %lld x %d lanes\n",
+					fn->name, (long long)vc, (long long)sc, lp->vf);
+			return rej(__LINE__);
+		}
+	}
 	if (lp->idata && lp->vf != 4)
 		return rej(__LINE__);	/* the induction's lanes are four w lanes */
 	if (lp->anystrd && lp->ivstep < 0)
@@ -1018,10 +1083,29 @@ overlaps(Fn *fn, Loop *lp, Ref init)
 
 /* the mask of a lane comparison of two vectors (all ones where it holds) */
 static Ref
-vcmp(Fn *fn, Loop *lp, int op, Ref a, Ref b)
+vcmp(Fn *fn, Loop *lp, int kind, int op, Ref a, Ref b)
 {
 	Ref t, r;
 
+	if (kind == LS || kind == LD) {
+		/* ordered float compares: a > b is b < a, a >= b is b <= a */
+		int d = kind == LD;
+		int lop = op == CEq ? (d ? Ovecfeqd : Ovecfeqs) : 0;
+		Ref x = a, y = b;
+		if (op == CGt || op == CGe) {
+			x = b;
+			y = a;
+		}
+		if (op == CEq)
+			lop = d ? Ovecfeqd : Ovecfeqs;
+		else if (op == CLt || op == CGt)
+			lop = d ? Ovecfltd : Ovecflts;
+		else
+			lop = d ? Ovecfled : Ovecfles;
+		t = newvec(fn);
+		push(lop, Kd, t, x, y);
+		return t;
+	}
 	switch (op) {
 	case CEq:
 		t = newvec(fn);
@@ -1240,9 +1324,11 @@ build(Fn *fn, Loop *lp)
 				continue;
 			if (rtype(ins->to) == RTmp && lp->lane[ins->to.val] == LM) {
 				/* a condition: the lanes' comparison, its mask */
-				Ref a0c = laneop(fn, lp, ins->arg[0], Kw, LW);
-				Ref a1c = laneop(fn, lp, ins->arg[1], Kw, LW);
-				lp->cmask = vcmp(fn, lp, lanecmp(ins->op), a0c, a1c);
+				int ck = fcmpcls(ins->op) >= 0 ? fcmpcls(ins->op) : Kw;
+				Ref a0c = laneop(fn, lp, ins->arg[0], ck, ck == Kw ? LW : ck == Ks ? LS : LD);
+				Ref a1c = laneop(fn, lp, ins->arg[1], ck, ck == Kw ? LW : ck == Ks ? LS : LD);
+				lp->cmask = vcmp(fn, lp, ck == Kw ? LW : ck == Ks ? LS : LD,
+					ck == Kw ? lanecmp(ins->op) : flanecmp(ins->op), a0c, a1c);
 				lp->map[ins->to.val] = lp->cmask;
 				continue;
 			}
