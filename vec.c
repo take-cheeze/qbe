@@ -92,6 +92,8 @@ struct Loop {
 	char *adr;	/* per temporary: an address (base + index) */
 	char *strd;	/* per address: a stride-2 access (two vectors, shuffled) */
 	int anystrd;
+	int idata;	/* the induction i is used as a value (lane); its vector: vi */
+	Ref vi, vin, vstep, viota;
 	Ref strz, strodd;	/* build: zero, and the odd lanes' mask, for the stride-2 stores */
 	char *lane;	/* per temporary: a vector value, its lane kind */
 	int64_t *step;	/* per index or address: its step in bytes per i */
@@ -330,6 +332,8 @@ classify(Fn *fn, Loop *lp, Ins *ins, struct Stats *st)
 		size = kind == LD ? 8 : 4;
 		if (rtype(a0) != RTmp || lp->lane[a0.val] != kind)
 			return 0;
+		if (req(a0, lp->i))
+			lp->idata = 1;
 		if (!access(lp, a1, size, kind, 1, st))
 			return 0;
 		st->nst++;
@@ -367,6 +371,8 @@ classify(Fn *fn, Loop *lp, Ins *ins, struct Stats *st)
 			;
 		else
 			return 0;
+		if (req(a0, lp->i) || req(a1, lp->i))
+			lp->idata = 1;
 		lp->redop[k] = ins->op;
 		lp->redseen[k] = 1;
 		st->nvec++;
@@ -385,8 +391,11 @@ classify(Fn *fn, Loop *lp, Ins *ins, struct Stats *st)
 	a[1] = a1;
 	nlane = 0;
 	for (j=0; j<2; j++) {
-		if (rtype(a[j]) == RTmp && lp->lane[a[j].val] == kind)
+		if (rtype(a[j]) == RTmp && lp->lane[a[j].val] == kind) {
 			nlane++;
+			if (req(a[j], lp->i))
+				lp->idata = 1;
+		}
 		else if (isinv(fn, lp, a[j], k) || (rtype(a[j]) == RCon && conint(fn, a[j], &c)))
 			;
 		else
@@ -519,6 +528,7 @@ findloop(Fn *fn, Blk *H, Loop *lp)
 	lp->adr = emalloc(nt);
 	lp->strd = emalloc(nt);
 	lp->anystrd = 0;
+	lp->idata = 0;
 	lp->lane = emalloc(nt);
 	lp->step = emalloc(nt * sizeof lp->step[0]);
 	lp->ioff = emalloc(nt * sizeof lp->ioff[0]);
@@ -554,6 +564,8 @@ findloop(Fn *fn, Blk *H, Loop *lp)
 	lp->idx[lp->i.val] = 1;
 	lp->step[lp->i.val] = 1;
 	lp->ioff[lp->i.val] = 0;
+	if (lp->ivcls == Kw)
+		lp->lane[lp->i.val] = LW;	/* usable as a w lane (vector lanes iv + j) */
 	for (p=H->phi; p; p=p->link)
 		lp->inl[p->to.val] = 1;
 	for (k=0; k<lp->nbody; k++) {
@@ -598,6 +610,8 @@ findloop(Fn *fn, Blk *H, Loop *lp)
 		return rej(__LINE__);
 	lp->vf = st.hasd ? 2 : 4;
 	lp->nst = st.nst;
+	if (lp->idata && lp->vf != 4)
+		return rej(__LINE__);	/* the induction's lanes are four w lanes */
 	if (lp->anystrd && lp->ivstep < 0)
 		return rej(__LINE__);	/* the stride-2 windows are taken counting up only */
 	/* a store and another access of its base: their distance in elements is 0, or at least VF */
@@ -714,6 +728,8 @@ laneop(Fn *fn, Loop *lp, Ref r, int cls, int kind)
 	Ref s, v;
 	int bop;
 
+	if (req(r, lp->i))
+		return lp->vi;	/* the induction as a value: its vector */
 	if (rtype(r) == RTmp && r.val < lp->nt && lp->lane[r.val])
 		return lp->map[r.val];
 	if (rtype(r) == RTmp && r.val < lp->nt && !req(lp->map[r.val], R))
@@ -819,6 +835,29 @@ overlaps(Fn *fn, Loop *lp, Ref init)
 	return ov;
 }
 
+/* the 16-byte buffer of the induction lanes: an alloc16 at the start of the entry block, made once per function */
+static Ref vbuf;
+static int vbufset;
+
+static Ref
+getbuf(Fn *fn)
+{
+	Blk *s;
+	Ins a;
+
+	if (vbufset)
+		return vbuf;
+	s = fn->start;
+	vbuf = newtmp("vec", Kl, fn);
+	a = (Ins){.op = Oalloc16, .cls = Kl, .to = vbuf, .arg = {getcon(16, fn), R}};
+	vgrow(&s->ins, s->nins+1);
+	memmove(s->ins+1, s->ins, s->nins * sizeof s->ins[0]);
+	s->ins[0] = a;
+	s->nins++;
+	vbufset = 1;
+	return vbuf;
+}
+
 static void
 build(Fn *fn, Loop *lp)
 {
@@ -877,6 +916,33 @@ build(Fn *fn, Loop *lp)
 		lp->redhs[k] = newtmp("vec", lp->redcls[k], fn);
 		lp->redvn[k] = R;
 		lp->redrd[k] = R;
+	}
+	if (lp->idata) {
+		/* vi = the lanes iv + j at P (the first window's), with a 16-byte buffer in the entry block */
+		Ref buf = getbuf(fn), sb, lj, ad, bc;
+		int jj;
+		sb = newtmp("vec", Kw, fn);
+		push(Ocopy, Kw, sb, init, R);
+		if (lp->ivstep < 0) {
+			lj = newtmp("vec", Kw, fn);
+			push(Osub, Kw, lj, sb, getcon(lp->vf - 1, fn));
+			sb = lj;
+		}
+		for (jj=0; jj<4; jj++) {
+			lj = newtmp("vec", Kw, fn);
+			push(Oadd, Kw, lj, sb, getcon(jj, fn));
+			ad = newtmp("vec", Kl, fn);
+			push(Oadd, Kl, ad, buf, getcon(4*jj, fn));
+			push(Ostorew, Kw, R, lj, ad);
+		}
+		lp->viota = newvec(fn);
+		push(Ovecload, Kd, lp->viota, buf, R);
+		bc = newtmp("vec", Kw, fn);
+		push(Ocopy, Kw, bc, getcon(lp->vf, fn), R);
+		lp->vstep = newvec(fn);
+		push(Ovecbcastw, Kd, lp->vstep, bc, R);
+		lp->vi = newvec(fn);
+		lp->vin = newvec(fn);
 	}
 	if (nib) {
 		vgrow(&P->ins, P->nins + nib);
@@ -957,7 +1023,7 @@ build(Fn *fn, Loop *lp)
 					/* the value's lanes go to the even positions of two vectors; the odd ones keep their values */
 					Ref a0 = cloneref(lp, ins->arg[1]);
 					Ref a16 = newtmp("vec", Kl, fn);
-					Ref x = lp->map[ins->arg[0].val];
+					Ref x = req(ins->arg[0], lp->i) ? lp->vi : lp->map[ins->arg[0].val];
 					Ref xs = newvec(fn), xh = newvec(fn), o0 = newvec(fn), o1 = newvec(fn);
 					Ref m0 = newvec(fn), m1 = newvec(fn), out0 = newvec(fn), out1 = newvec(fn);
 					int kd = lp->vf == 2;
@@ -974,7 +1040,8 @@ build(Fn *fn, Loop *lp)
 					push(Ovecstore, Kw, R, out1, a16);
 					continue;
 				}
-				push(Ovecstore, Kw, R, lp->map[ins->arg[0].val], cloneref(lp, ins->arg[1]));
+				push(Ovecstore, Kw, R, req(ins->arg[0], lp->i) ? lp->vi : lp->map[ins->arg[0].val],
+					cloneref(lp, ins->arg[1]));
 				continue;
 			default:
 				break;
@@ -991,7 +1058,9 @@ build(Fn *fn, Loop *lp)
 			lp->map[ins->to.val] = t;
 		}
 	}
-	/* ivn = iv + VF; jmp Hv */
+	/* ivn = iv + VF; vin = vi + VF (the lanes); jmp Hv */
+	if (lp->idata)
+		push(lp->ivstep > 0 ? Ovecaddw : Ovecsubw, Kd, lp->vin, lp->vi, lp->vstep);
 	push(lp->ivstep > 0 ? Oadd : Osub, lp->ivcls, ivn, iv, getcon(lp->vf, fn));
 	idup(Bv, ib, nib);
 	Bv->jmp.type = Jjmp;
@@ -1053,6 +1122,11 @@ build(Fn *fn, Loop *lp)
 	/* Hv: iv = phi(P or Chk: init, Bv: ivn); the accumulators */
 	hp = mkphi(iv, lp->ivcls, check ? Chk : P, init, Bv, ivn);
 	Hv->phi = hp;
+	if (lp->idata) {
+		vp = mkphi(lp->vi, Kd, check ? Chk : P, lp->viota, Bv, lp->vin);
+		hp->link = vp;
+		hp = vp;
+	}
 	for (k=0; k<(uint)nred; k++) {
 		vp = mkphi(lp->redva[k], Kd, check ? Chk : P, lp->redvi[k], Bv, lp->redvn[k]);
 		sp = mkphi(lp->redhs[k], lp->redcls[k], check ? Chk : P, lp->redinit[k], Bv, lp->redhs[k]);
@@ -1108,6 +1182,7 @@ vec(Fn *fn)
 		return;
 	ib = vnew(0, sizeof ib[0], PHeap);
 	nib = 0;
+	vbufset = 0;
 	/* the candidates first: a loop changed by an earlier one is not in the list */
 	cand = vnew(0, sizeof cand[0], PFn);
 	nc = 0;
