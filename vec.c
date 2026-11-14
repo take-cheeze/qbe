@@ -99,7 +99,8 @@ struct Loop {
 	int ptr;	/* a pointer induction: the accesses are through i itself, stepping by unit bytes */
 	int64_t unit;	/* the bytes per iteration of i (1 for an index) */
 	int vf;		/* lanes per vector */
-	int wide;	/* -Y: 256-bit vectors, 8 lanes of int32 or float32 (AVX2) */
+	int wide;	/* -Y: 256-bit vectors, 8 lanes of int32 or float32 (AVX2), or 4 lanes of double (dbl) */
+	int dbl;
 	int rvv;	/* -Y on rv64: four lanes of int32 or float32 in v registers (RVV) */
 	int nst;	/* stores */
 	uint nt;	/* fn->ntmp when the loop was found */
@@ -735,6 +736,7 @@ findloop(Fn *fn, Blk *H, Loop *lp)
 	lp->n = cmp->arg[1];
 	lp->vf = 0;
 	lp->wide = 0;
+	lp->dbl = 0;
 	lp->rvv = 0;
 	lp->nbref = 0;
 	lp->nacc = 0;
@@ -866,10 +868,14 @@ findloop(Fn *fn, Blk *H, Loop *lp)
 	if (st.hasd && st.hasws && !st.conv)
 		return rej(__LINE__);	/* mixed widths only through the conversions */
 	lp->vf = st.hasd ? 2 : 4;
+	/* -Y with doubles only: four lanes in ymm (the int and float paths keep their own lane counts) */
+	lp->dbl = st.hasd && !st.hasws && vecavx && wideok() && !st.conv && !lp->anystrd && !lp->idata;
+	if (lp->dbl)
+		lp->vf = 4;
 	/* -Y: 256-bit vectors (8 int32 or float32 lanes) for a loop of element-wise ops only: no double, conversion,
 	 * reduction, condition, mask, stride-2 access, or induction as data (the lane-index buffer is four lanes) */
-	lp->wide = vecavx && wideok() && !st.hasd && !st.conv && !lp->anystrd && !lp->idata;
-	if (lp->wide)
+	lp->wide = vecavx && wideok() && !st.conv && !lp->anystrd && !lp->idata && (!st.hasd || lp->dbl);
+	if (lp->wide && !lp->dbl)
 		lp->vf = 8;
 	/* rv64 (RVV): the same loops, four lanes; any other loop stays out (the rv64 emitter has no SSE forms) */
 	lp->rvv = vecavx && strcmp(T.name, "rv64") == 0 && !st.hasd && !st.conv && !lp->hascond && !lp->anystrd;
@@ -991,6 +997,14 @@ wideop(int op)
 	case Ovecfeqs: return Ovecfeqs256;
 	case Ovecflts: return Ovecflts256;
 	case Ovecfles: return Ovecfles256;
+	case Ovecaddd: return Ovecaddd256;
+	case Ovecsubd: return Ovecsubd256;
+	case Ovecmuld: return Ovecmuld256;
+	case Ovecdivd: return Ovecdivd256;
+	case Ovecbcastd: return Ovecbcastd256;
+	case Ovecfeqd: return Ovecfeqd256;
+	case Ovecfltd: return Ovecfltd256;
+	case Ovecfled: return Ovecfled256;
 	}
 	return op;
 }
@@ -1595,10 +1609,10 @@ build(Fn *fn, Loop *lp)
 				hi = newvec(fn);
 				push(Ovecfold256, Kd, hi, acc, R);
 				f = newvec(fn);
-				push(vecop(lp->redop[k], rc == Kw ? LW : LS), Kd, f, acc, hi);
+				push(vecop(lp->redop[k], rc == Kw ? LW : rc == Ks ? LS : LD), Kd, f, acc, hi);
 				vecw = sw;
 				acc = f;
-				nl = 4;
+				nl = lp->dbl ? 2 : 4;
 			}
 			for (j=0; j<(uint)nl; j++) {
 				e = newtmp("vec", rc, fn);

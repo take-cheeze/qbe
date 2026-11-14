@@ -301,6 +301,14 @@ O(vecandn256, T(e,e,e,d, e,e,e,d), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)  /* vpa
 O(vecfeqs256, T(e,e,e,d, e,e,e,d), F(0,0,0,1,0,0,0,0,0,0)) X(0,0,0) V(0)  /* vcmpps eq (ordered) */
 O(vecflts256, T(e,e,e,d, e,e,e,d), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)  /* vcmpps lt */
 O(vecfles256, T(e,e,e,d, e,e,e,d), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)  /* vcmpps le */
+O(vecaddd256, T(e,e,e,d, e,e,e,d), F(0,0,0,1,0,0,0,0,0,0)) X(0,0,0) V(0)  /* vaddpd */
+O(vecsubd256, T(e,e,e,d, e,e,e,d), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)  /* vsubpd */
+O(vecmuld256, T(e,e,e,d, e,e,e,d), F(0,0,0,1,0,0,0,0,0,0)) X(0,0,0) V(0)  /* vmulpd */
+O(vecdivd256, T(e,e,e,d, e,e,e,d), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)  /* vdivpd */
+O(vecbcastd256, T(e,e,e,d, e,e,e,d), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0) /* vbroadcastsd: a double to all four lanes */
+O(vecfeqd256, T(e,e,e,d, e,e,e,d), F(0,0,0,1,0,0,0,0,0,0)) X(0,0,0) V(0)  /* vcmppd eq (ordered) */
+O(vecfltd256, T(e,e,e,d, e,e,e,d), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)  /* vcmppd lt */
+O(vecfled256, T(e,e,e,d, e,e,e,d), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)  /* vcmppd le */
 O(vecfold256, T(e,e,e,d, e,e,e,d), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)  /* vextracti128: the high 128 bits of a ymm, as an xmm */
 
 #undef T
