@@ -915,7 +915,9 @@ findloop(Fn *fn, Blk *H, Loop *lp)
 		/* a constant bound is the trip count only for a count up from 0 (a down count's bound is not) */
 		if (lp->ivstep > 0 && rtype(lp->n) == RCon && conint(fn, lp->n, &cst) && cst < 2 * lp->vf)
 			return rej(__LINE__);	/* too few iterations for a vector loop */
-		if (!veccost && vc > sc * lp->vf) {
+		/* a stride-2 window of two doubles is two vector loads (as the scalar code has) and an unpack: no more
+		 * memory accesses than the scalar loop, so the cost estimate's extra shuffle cost does not refuse it */
+		if (!veccost && !(lp->anystrd && lp->vf == 2 && !st.conv) && vc > sc * lp->vf) {
 			if (debug['V'])
 				fprintf(stderr, "vec: %s: not profitable: vector cost %lld, scalar %lld x %d lanes\n",
 					fn->name, (long long)vc, (long long)sc, lp->vf);
