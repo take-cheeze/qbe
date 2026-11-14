@@ -10,7 +10,7 @@ int rv64_rsave[] = {
 	T0, T1, T2, T3, T4, T5,
 	A0, A1, A2, A3, A4, A5, A6, A7,
 	FA0, FA1, FA2,  FA3,  FA4, FA5, FA6, FA7,
-	FT0, FT1, FT2,  FT3,  FT4, FT5, FT6, FT7,
+	FT1, FT2,  FT3,  FT4, FT5, FT6, FT7,
 	FT8, FT9, FT10,
 	-1
 };
@@ -35,12 +35,12 @@ Target T_rv64 = {
 	.name = "rv64",
 	.gpr0 = T0,
 	.ngpr = NGPR,
-	.fpr0 = FT0,
-	.nfpr = NFPR,
+	.fpr0 = FT1,	/* FT0 is v0, the vector mask (rv64/emit.c): not allocated */
+	.nfpr = NFPR - 1,
 	.rglob = RGLOB,
 	.nrglob = 5,
 	.rsave = rv64_rsave,
-	.nrsave = {NGPS, NFPS},
+	.nrsave = {NGPS, NFPS-1},	/* FT0 is not allocated: it is v0, the vector mask (rv64/emit.c) */
 	.retregs = rv64_retregs,
 	.argregs = rv64_argregs,
 	.memargs = rv64_memargs,
@@ -53,5 +53,5 @@ Target T_rv64 = {
 	.cansel = 0,
 };
 
-MAKESURE(rsave_size_ok, sizeof rv64_rsave == (NGPS+NFPS+1) * sizeof(int));
+MAKESURE(rsave_size_ok, sizeof rv64_rsave == (NGPS+NFPS) * sizeof(int));
 MAKESURE(rclob_size_ok, sizeof rv64_rclob == (NCLR+1) * sizeof(int));

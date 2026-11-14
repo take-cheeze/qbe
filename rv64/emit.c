@@ -343,6 +343,14 @@ vecaddr(Ref r, Fn *fn, FILE *f)
 	return 0;
 }
 
+/* the vector mask (v0, the FP register FT0 that the allocator never uses) to all-ones lanes where set */
+static void
+vecmask(Ins *i, FILE *f)
+{
+	fprintf(f, "\tvmv.v.i v%d, 0\n", VREG(i->to));
+	fprintf(f, "\tvmerge.vim v%d, v%d, -1, v0\n", VREG(i->to), VREG(i->to));
+}
+
 /* a two-source vector op: vd = vop(va, vb) */
 static void
 vecbin(char *mn, Ins *i, FILE *f)
@@ -375,6 +383,36 @@ emitins(Ins *i, Fn *fn, FILE *f)
 	case Ovecbcasts:
 		vsetvl(f);
 		fprintf(f, "\tvfmv.v.f v%d, %s\n", VREG(i->to), rname[i->arg[0].val]);
+		break;
+	case Ovecceqw:
+		vsetvl(f);
+		fprintf(f, "\tvmseq.vv v0, v%d, v%d\n", VREG(i->arg[0]), VREG(i->arg[1]));
+		vecmask(i, f);
+		break;
+	case Ovecgtw:	/* a > b is b < a */
+		vsetvl(f);
+		fprintf(f, "\tvmslt.vv v0, v%d, v%d\n", VREG(i->arg[1]), VREG(i->arg[0]));
+		vecmask(i, f);
+		break;
+	case Ovecfeqs:
+		vsetvl(f);
+		fprintf(f, "\tvmfeq.vv v0, v%d, v%d\n", VREG(i->arg[0]), VREG(i->arg[1]));
+		vecmask(i, f);
+		break;
+	case Ovecflts:
+		vsetvl(f);
+		fprintf(f, "\tvmflt.vv v0, v%d, v%d\n", VREG(i->arg[0]), VREG(i->arg[1]));
+		vecmask(i, f);
+		break;
+	case Ovecfles:
+		vsetvl(f);
+		fprintf(f, "\tvmfle.vv v0, v%d, v%d\n", VREG(i->arg[0]), VREG(i->arg[1]));
+		vecmask(i, f);
+		break;
+	case Ovecandn:	/* ~a & b: the not in v31 (ft11, never allocated: the scratch), then the and */
+		vsetvl(f);
+		fprintf(f, "\tvxor.vi v31, v%d, -1\n", VREG(i->arg[0]));
+		fprintf(f, "\tvand.vv v%d, v31, v%d\n", VREG(i->to), VREG(i->arg[1]));
 		break;
 	case Ovecaddw:  vecbin("vadd.vv", i, f); break;
 	case Ovecsubw:  vecbin("vsub.vv", i, f); break;
