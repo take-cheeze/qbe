@@ -409,9 +409,136 @@ fixarg(Ref *pr, int sz, int t, E *e)
 	return 0;
 }
 
+/* the vector ops (vec.c), in NEON: a vector value is a Kd temporary in a v register; a memory
+ * operand (an address, or a slot) goes through emitf's %M. */
+static int
+vn(Ref r)
+{
+	return r.val - V0;
+}
+
+static void
+vop3(E *e, const char *mn, const char *ar, Ins *i)
+{
+	fprintf(e->f, "\t%s\tv%d.%s, v%d.%s, v%d.%s\n", mn, vn(i->to), ar, vn(i->arg[0]), ar, vn(i->arg[1]), ar);
+}
+
+static void
+vecemit(Ins *i, E *e)
+{
+	char buf[128];
+	int j;
+
+	switch (i->op) {
+	case Ovecload:
+		sprintf(buf, "ldr\tq%d, %%M0", vn(i->to));
+		emitf(buf, i, e);
+		break;
+	case Ovecstore:
+		sprintf(buf, "str\tq%d, %%M1", vn(i->arg[0]));
+		emitf(buf, i, e);
+		break;
+	case Ovecload8:
+		sprintf(buf, "ldr\td%d, %%M0", vn(i->to));
+		emitf(buf, i, e);
+		break;
+	case Ovecstore8:
+		sprintf(buf, "str\td%d, %%M1", vn(i->arg[0]));
+		emitf(buf, i, e);
+		break;
+	case Ovecbcastw:
+		fprintf(e->f, "\tdup\tv%d.4s, %s\n", vn(i->to), rname(i->arg[0].val, Kw));
+		break;
+	case Ovecbcasts:
+		fprintf(e->f, "\tdup\tv%d.4s, v%d.s[0]\n", vn(i->to), vn(i->arg[0]));
+		break;
+	case Ovecbcastd:
+		fprintf(e->f, "\tdup\tv%d.2d, v%d.d[0]\n", vn(i->to), vn(i->arg[0]));
+		break;
+	case Ovecaddw: vop3(e, "add", "4s", i); break;
+	case Ovecsubw: vop3(e, "sub", "4s", i); break;
+	case Ovecmulw: vop3(e, "mul", "4s", i); break;
+	case Ovecandw: vop3(e, "and", "16b", i); break;
+	case Ovecorw: vop3(e, "orr", "16b", i); break;
+	case Ovecxorw: vop3(e, "eor", "16b", i); break;
+	case Ovecadds: vop3(e, "fadd", "4s", i); break;
+	case Ovecsubs: vop3(e, "fsub", "4s", i); break;
+	case Ovecmuls: vop3(e, "fmul", "4s", i); break;
+	case Ovecdivs: vop3(e, "fdiv", "4s", i); break;
+	case Ovecaddd: vop3(e, "fadd", "2d", i); break;
+	case Ovecsubd: vop3(e, "fsub", "2d", i); break;
+	case Ovecmuld: vop3(e, "fmul", "2d", i); break;
+	case Ovecdivd: vop3(e, "fdiv", "2d", i); break;
+	case Ovecext0w: case Ovecext1w: case Ovecext2w: case Ovecext3w:
+		j = i->op - Ovecext0w;
+		fprintf(e->f, "\tmov\t%s, v%d.s[%d]\n", rname(i->to.val, Kw), vn(i->arg[0]), j);
+		break;
+	case Ovecext0s: case Ovecext1s: case Ovecext2s: case Ovecext3s:
+		j = i->op - Ovecext0s;
+		fprintf(e->f, "\tmov\ts%d, v%d.s[%d]\n", vn(i->to), vn(i->arg[0]), j);
+		break;
+	case Ovecext0d: case Ovecext1d:
+		j = i->op - Ovecext0d;
+		fprintf(e->f, "\tmov\td%d, v%d.d[%d]\n", vn(i->to), vn(i->arg[0]), j);
+		break;
+	case Ovecpack02:
+		fprintf(e->f, "\tuzp1\tv%d.4s, v%d.4s, v%d.4s\n", vn(i->to), vn(i->arg[0]), vn(i->arg[0]));
+		break;
+	case Ovecunpckl32: vop3(e, "zip1", "4s", i); break;
+	case Ovecunpckh32: vop3(e, "zip2", "4s", i); break;
+	case Ovecshufe: vop3(e, "uzp1", "4s", i); break;
+	case Ovecshufo: vop3(e, "uzp2", "4s", i); break;
+	case Ovecunpcklpd: vop3(e, "zip1", "2d", i); break;
+	case Ovecunpckhpd: vop3(e, "zip2", "2d", i); break;
+	case Ovecsrlq32:
+		fprintf(e->f, "\tushr\tv%d.2d, v%d.2d, #32\n", vn(i->to), vn(i->arg[0]));
+		break;
+	case Ovecceqw: vop3(e, "cmeq", "4s", i); break;
+	case Ovecgtw: vop3(e, "cmgt", "4s", i); break;
+	case Ovecandn:	/* ~a & b: bic takes b and clears the bits of a */
+		fprintf(e->f, "\tbic\tv%d.16b, v%d.16b, v%d.16b\n", vn(i->to), vn(i->arg[1]), vn(i->arg[0]));
+		break;
+	case Ovecfeqs: vop3(e, "fcmeq", "4s", i); break;
+	case Ovecfeqd: vop3(e, "fcmeq", "2d", i); break;
+	case Ovecflts:	/* a < b is b > a */
+		fprintf(e->f, "\tfcmgt\tv%d.4s, v%d.4s, v%d.4s\n", vn(i->to), vn(i->arg[1]), vn(i->arg[0]));
+		break;
+	case Ovecfltd:
+		fprintf(e->f, "\tfcmgt\tv%d.2d, v%d.2d, v%d.2d\n", vn(i->to), vn(i->arg[1]), vn(i->arg[0]));
+		break;
+	case Ovecfles:
+		fprintf(e->f, "\tfcmge\tv%d.4s, v%d.4s, v%d.4s\n", vn(i->to), vn(i->arg[1]), vn(i->arg[0]));
+		break;
+	case Ovecfled:
+		fprintf(e->f, "\tfcmge\tv%d.2d, v%d.2d, v%d.2d\n", vn(i->to), vn(i->arg[1]), vn(i->arg[0]));
+		break;
+	case Ovecw2d:	/* the low two int32 to two doubles */
+		fprintf(e->f, "\tsxtl\tv%d.2d, v%d.2s\n\tscvtf\tv%d.2d, v%d.2d\n",
+			vn(i->to), vn(i->arg[0]), vn(i->to), vn(i->to));
+		break;
+	case Ovecd2w:	/* two doubles to two int32, the high half zeroed */
+		fprintf(e->f, "\tfcvtzs\tv%d.2d, v%d.2d\n\txtn\tv%d.2s, v%d.2d\n",
+			vn(i->to), vn(i->arg[0]), vn(i->to), vn(i->to));
+		break;
+	default:
+		die("arm64: no vector code for %s", optab[i->op].name);
+	}
+}
+
 static void
 emitins(Ins *i, E *e)
 {
+	if (!strncmp(optab[i->op].name, "vec", 3)) {
+		vecemit(i, e);
+		return;
+	}
+	if (i->op == Ocopy && i->cls == Kd && rtype(i->to) == RTmp && rtype(i->arg[0]) == RTmp
+	&& i->to.val >= V0 && i->arg[0].val >= V0) {
+		/* a double or a vector: the whole v register (fmov would keep the low 64 bits only) */
+		if (i->to.val != i->arg[0].val)
+			fprintf(e->f, "\tmov\tv%d.16b, v%d.16b\n", vn(i->to), vn(i->arg[0]));
+		return;
+	}
 	char *l, *p, *rn;
 	uint64_t s;
 	int o, t;
@@ -536,13 +663,18 @@ framelayout(E *e)
 	uint o;
 	uint64_t f;
 
+	uint ov = 0;
+
 	for (o=0, r=arm64_rclob; *r>=0; r++)
-		o += 1 & (e->fn->reg >> *r);
+		if (*r >= V0)
+			ov += 1 & (e->fn->reg >> *r);
+		else
+			o += 1 & (e->fn->reg >> *r);
 	f = e->fn->slot;
 	f = (f + 3) & -4;
 	o += o & 1;
 	e->padding = 4*(f-e->fn->slot);
-	e->frame = 4*f + 8*o;
+	e->frame = 4*f + 8*o + 16*ov;
 }
 
 /*
@@ -648,9 +780,9 @@ arm64_emitfn(Fn *fn, FILE *out)
 	s = (e->frame - e->padding) / 4;
 	for (r=arm64_rclob; *r>=0; r++)
 		if (e->fn->reg & BIT(*r)) {
-			s -= 2;
+			s -= *r >= V0 ? 4 : 2;
 			i = &(Ins){.arg = {TMP(*r), SLOT(s)}};
-			i->op = *r >= V0 ? Ostored : Ostorel;
+			i->op = *r >= V0 ? Ovecstore : Ostorel;
 			/* the slot is read before the store: emitins rewrites an out-of-range slot operand into an address temporary */
 			sv = slot(i->arg[1], e);
 			emitins(i, e);
@@ -683,9 +815,11 @@ arm64_emitfn(Fn *fn, FILE *out)
 			s = (e->frame - e->padding) / 4;
 			for (r=arm64_rclob; *r>=0; r++)
 				if (e->fn->reg & BIT(*r)) {
-					s -= 2;
-					i = &(Ins){Oload, 0, TMP(*r), {SLOT(s)}};
-					i->cls = *r >= V0 ? Kd : Kl;
+					s -= *r >= V0 ? 4 : 2;
+					if (*r >= V0)
+						i = &(Ins){Ovecload, 0, TMP(*r), {SLOT(s)}};
+					else
+						i = &(Ins){Oload, Kl, TMP(*r), {SLOT(s)}};
 					emitins(i, e);
 				}
 			if (e->fn->dynalloc)
