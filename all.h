@@ -63,6 +63,9 @@ struct Target {
 	char asloc[4];
 	char assym[4];
 	uint cansel:1;
+	uint blitcall:1; /* a large block copy is a call to memmove: the target's argregs and CALL encoding are the sysv ones */
+	uint ptr32:1;    /* pointers are 32-bit, of class w (i386); the IL's memory operands are then w */
+	uint regparm:2;  /* i386: the first integer arguments go in eax, edx, ecx (gcc's -mregparm) */
 };
 
 #define BIT(n) ((bits)1 << (n))
@@ -164,7 +167,7 @@ enum J {
 	X(jfisle) X(jfislt) X(jfiuge) X(jfiugt) \
 	X(jfiule) X(jfiult) X(jffeq)  X(jffge)  \
 	X(jffgt)  X(jffle)  X(jfflt)  X(jffne)  \
-	X(jffo)   X(jffuo)  X(hlt)
+	X(jffo)   X(jffuo)  X(hlt)      X(jtab)
 #define X(j) J##j,
 	JMPS(X)
 #undef X
@@ -209,9 +212,11 @@ enum {
 	Kw,
 	Kl,
 	Ks,
-	Kd
+	Kd,
+	Km = 10, /* memory pointer in optab[].argcls: Kptr (argcls() resolves it) */
 };
 
+#define Kptr (T.ptr32 ? Kw : Kl) /* the class of a pointer */
 #define KWIDE(k) ((k)&1)
 #define KBASE(k) ((k)>>1)
 
@@ -257,10 +262,15 @@ struct Blk {
 	} jmp;
 	Blk *s1;
 	Blk *s2;
+	/* jtab (nfcxx): an index in jmp.arg selects tab[index] when it is below ntab; otherwise s1 (the default). s2 is 0. */
+	Blk **tab;
+	uint ntab;
+	int keep;	/* nfcxx: a jtab target, reached only through its table: simpljmp must not remove it */
 	Blk *link;
 
 	uint id;
 	uint visit;
+	char tail;	/* amd64: the block's call is a tail call (sysv.c, tailcallok) */
 
 	Blk *idom;
 	Blk *dom, *dlink;
@@ -361,6 +371,7 @@ struct Tmp {
 	} width;
 	int visit;
 	uint gcmbid;
+	uint vec:2; /* vec.c: a vector value (class Kd, held in an xmm register; spilled in a 16-byte slot), 1; or a 256-bit one (-Y: ymm, 32-byte slot), 2 */
 };
 
 struct Con {
@@ -391,13 +402,15 @@ struct Lnk {
 	char export;
 	char thread;
 	char common;
-	char align;
+	int align;
 	char *sec;
 	char *secf;
 };
 
 struct Fn {
+	int widevec;	/* vec.c: a 256-bit vector (Tmp.vec 2) is in use: the Kd slots are 32 bytes */
 	Blk *start;
+	Blk *eh_lp;  /* the landing pad (a block labeled eh.lp): unwound calls of the function enter it */
 	Tmp *tmp;
 	Con *con;
 	Mem *mem;
@@ -470,6 +483,15 @@ struct Dat {
 /* main.c */
 extern Target T;
 extern char debug['Z'+1];
+extern int nofp;       /* -n (nfcxx): no floating-point registers in integer code (the Linux kernel's -mno-sse) */
+extern int nounwind;   /* -U (nfcxx): no unwind tables (CFI), the kernel's -fno-asynchronous-unwind-tables */
+extern int absaddr;    /* -A (nfcxx): global addresses are absolute immediates (gcc -mcmodel=kernel) */
+extern int pic;
+extern int vectorize;  /* -V (nfcxx): vectorize simple loops (vec.c; amd64_sysv, SSE) */
+extern int vecremarks;  /* -R (nfcxx): vectorizer remarks on stderr (vec.c) */
+extern int vecassoc;   /* -F: vectorize float reductions, which reassociates them (vec.c) */
+extern int veccost;   /* -C: vectorize even where the cost model says it is not profitable (vec.c) */
+extern int vecavx;     /* -Y: with -V, 256-bit (AVX2) vectors for simple int32 and float32 loops (vec.c; amd64_sysv, amd64_apple) */
 
 /* util.c */
 typedef enum {
@@ -514,6 +536,7 @@ Ref getcon(int64_t, Fn *);
 int addcon(Con *, Con *, int);
 int isconbits(Fn *fn, Ref r, int64_t *v);
 void salloc(Ref, Ref, Fn *);
+int stkalloc(Ins *, Ref, int, uint64_t, Fn *);
 void dumpts(BSet *, Tmp *, FILE *);
 void runmatch(uchar *, Num *, Ref, Ref *);
 void bsinit(BSet *, uint);
@@ -547,6 +570,11 @@ void elimsb(Fn *);
 
 /* cfg.c */
 Blk *newblk(void);
+/* successors (nfcxx): slot 0 is s1, slot 1 is s2, slots 2.. are the jtab table; a slot may be null */
+Blk **succslot(Blk *, uint);
+uint nsuccslot(Blk *);
+int hassucc(Blk *, Blk *);
+int multisucc(Blk *);
 void fillpreds(Fn *);
 void fillcfg(Fn *);
 void filldom(Fn *);
@@ -583,6 +611,9 @@ void adduse(Tmp *, int, Blk *, ...);
 void filluse(Fn *);
 void ssa(Fn *);
 void ssacheck(Fn *);
+
+/* vec.c */
+void vec(Fn *);
 
 /* copy.c */
 void narrowpars(Fn *fn);
@@ -625,6 +656,11 @@ void emitdat(Dat *, FILE *);
 void emitdbgfile(char *, FILE *);
 void emitdbgloc(uint, uint, FILE *);
 int stashbits(bits, int);
+void ehfnbegin(Fn *, FILE *);
+void ehlpbegin(Fn *, Blk *, FILE *);
+void ehcsbegin(Fn *, Blk *, FILE *);
+void ehcsend(Fn *, Blk *, FILE *);
+void ehfnend(Fn *, FILE *);
 void elf_emitfnfin(char *, FILE *);
 void elf_emitfin(FILE *);
 void macho_emitfin(FILE *);

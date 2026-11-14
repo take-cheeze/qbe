@@ -1,0 +1,92 @@
+export
+function w $press(l %a, l %p1, l %p2, l %p3, l %p4, l %p5, l %p6, l %p7, w %n, w %k) {
+@start
+@head
+	%i =w phi @start 0, @latch %i2
+	%c =w csltw %i, %n
+	jnz %c, @body, @done
+@body
+	%t =l extsw %i
+	%o =l mul %t, 4
+	%q1 =l add %p1, %o
+	%x1 =w loadsw %q1
+	%q2 =l add %p2, %o
+	%x2 =w loadsw %q2
+	%q3 =l add %p3, %o
+	%x3 =w loadsw %q3
+	%q4 =l add %p4, %o
+	%x4 =w loadsw %q4
+	%q5 =l add %p5, %o
+	%x5 =w loadsw %q5
+	%q6 =l add %p6, %o
+	%x6 =w loadsw %q6
+	%q7 =l add %p7, %o
+	%x7 =w loadsw %q7
+	%w1 =w add %x1, %k
+	%w2 =w add %x2, %k
+	%w3 =w add %x3, %k
+	%w4 =w add %x4, %k
+	%w5 =w add %x5, %k
+	%w6 =w add %x6, %k
+	%w7 =w add %x7, %k
+	%v1 =w and %x1, %x2
+	%v2 =w and %x2, %x3
+	%v3 =w and %x3, %x4
+	%v4 =w and %x4, %x5
+	%v5 =w and %x5, %x6
+	%v6 =w and %x6, %x7
+	%v7 =w and %x7, %x1
+	%s0 =w add %w1, %w2
+	%s1 =w add %s0, %w3
+	%s2 =w add %s1, %w4
+	%s3 =w add %s2, %w5
+	%s4 =w add %s3, %w6
+	%s5 =w add %s4, %w7
+	%s6 =w add %s5, %v1
+	%s7 =w add %s6, %v2
+	%s8 =w add %s7, %v3
+	%s9 =w add %s8, %v4
+	%s10 =w add %s9, %v5
+	%s11 =w add %s10, %v6
+	%s12 =w add %s11, %v7
+	%s13 =w add %s12, %x1
+	%s14 =w add %s13, %x2
+	%s15 =w add %s14, %x3
+	%s16 =w add %s15, %x4
+	%s17 =w add %s16, %x5
+	%s18 =w add %s17, %x6
+	%s19 =w add %s18, %x7
+	%qa =l add %a, %o
+	storew %s19, %qa
+	jmp @latch
+@latch
+	%i2 =w add %i, 1
+	jmp @head
+@done
+	ret 0
+}
+
+# >>> driver
+# #include <stdio.h>
+# void press(int *, int *, int *, int *, int *, int *, int *, int *, int, int);
+# int A[64], P[7][64];
+# int main() {
+# 	int n, i, j, k, bad = 0;
+# 	for (n = 0; n <= 19; n++) for (k = -3; k <= 3; k += 3) {
+# 		for (j = 0; j < 7; j++) for (i = 0; i < 64; i++) P[j][i] = i * (j + 3) + j - 40;
+# 		for (i = 0; i < 64; i++) A[i] = 1000 + i;
+# 		press(A, P[0], P[1], P[2], P[3], P[4], P[5], P[6], n, k);
+# 		for (i = 0; i < 64; i++) {
+# 			unsigned int x[7], s = 0;
+# 			if (i >= n) { if (A[i] != 1000 + i) bad++; continue; }
+# 			for (j = 0; j < 7; j++) x[j] = P[j][i];
+# 			for (j = 0; j < 7; j++) s += x[j] + k;
+# 			for (j = 0; j < 7; j++) s += x[j] & x[(j + 1) % 7];
+# 			for (j = 0; j < 7; j++) s += x[j];
+# 			if (A[i] != (int)s) bad++;
+# 		}
+# 	}
+# 	printf("bad=%d\n", bad);
+# 	return bad != 0;
+# }
+# <<<

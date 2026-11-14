@@ -71,8 +71,9 @@ fixarg(Ref *pr, int k, int phi, Fn *fn)
 {
 	char buf[32];
 	Con *c, cc;
-	Ref r0, r1, r2, r3;
+	Ref r0, r1, r2, r3, r4;
 	int s, n;
+	int64_t n64;
 
 	r0 = *pr;
 	switch (rtype(r0)) {
@@ -87,7 +88,14 @@ fixarg(Ref *pr, int k, int phi, Fn *fn)
 				cc = (Con){.type = CBits};
 				cc.bits.i = c->bits.i;
 				r3 = newcon(&cc, fn);
-				emit(Oadd, Kl, r1, r2, r3);
+				if (imm(&cc, Kl, &n64) == Iother) {
+					/* not an add immediate (12 bits, or 12 bits shifted): the offset goes in a register. The isel emits
+					 * backwards, so the copy is emitted after the add. */
+					r4 = newtmp("isel", Kl, fn);
+					emit(Oadd, Kl, r1, r2, r4);
+					emit(Ocopy, Kl, r4, r3, R);
+				} else
+					emit(Oadd, Kl, r1, r2, r3);
 				r1 = r2;
 			}
 			if (T.apple && (c->sym.type & SThr)) {
@@ -237,6 +245,8 @@ sel(Ins i, Fn *fn)
 static void
 seljmp(Blk *b, Fn *fn)
 {
+	if (b->jmp.type == Jjtab)
+		die("jtab (nfcxx): only the amd64 target has jump tables");
 	Ref r;
 	Ins *i, *ir;
 	int ck, cc, use;

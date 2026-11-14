@@ -10,7 +10,42 @@ newblk()
 	*b = z;
 	b->ins = vnew(0, sizeof b->ins[0], PFn);
 	b->pred = vnew(0, sizeof b->pred[0], PFn);
+	b->tab = vnew(0, sizeof b->tab[0], PFn);
 	return b;
+}
+
+Blk **
+succslot(Blk *b, uint k)
+{
+	if (k == 0)
+		return &b->s1;
+	if (k == 1)
+		return &b->s2;
+	return &b->tab[k-2];
+}
+
+uint
+nsuccslot(Blk *b)
+{
+	return 2 + b->ntab;
+}
+
+int
+hassucc(Blk *bp, Blk *b)
+{
+	uint k;
+
+	for (k=0; k<nsuccslot(bp); k++)
+		if (*succslot(bp, k) == b)
+			return 1;
+	return 0;
+}
+
+/* more than one successor: a jnz (s1 != s2) or a jtab */
+int
+multisucc(Blk *b)
+{
+	return b->s2 || b->ntab;
 }
 
 static void
@@ -26,7 +61,7 @@ fixphis(Fn *f)
 			for (n=n0=0; n<p->narg; n++) {
 				bp = p->blk[n];
 				if (bp->id != -1u)
-				if (bp->s1 == b || bp->s2 == b) {
+				if (hassucc(bp, b)) {
 					p->blk[n0] = bp;
 					p->arg[n0] = p->arg[n];
 					n0++;
@@ -57,6 +92,9 @@ fillpreds(Fn *f)
 			addpred(b, b->s1);
 		if (b->s2 && b->s2 != b->s1)
 			addpred(b, b->s2);
+		/* the jtab targets are distinct (the parser refuses a repeat), so each adds one predecessor */
+		for (uint k=2; k<nsuccslot(b); k++)
+			addpred(b, *succslot(b, k));
 	}
 }
 
@@ -76,6 +114,8 @@ porec(Blk *b, uint *npo)
 	}
 	porec(s1, npo);
 	porec(s2, npo);
+	for (uint k=2; k<nsuccslot(b); k++)
+		porec(*succslot(b, k), npo);
 	b->id = (*npo)++;
 }
 
@@ -87,6 +127,8 @@ fillrpo(Fn *f)
 	for (b=f->start; b; b=b->link)
 		b->id = -1u;
 	f->nblk = 0;
+	/* the landing pad first: the entry must keep the smallest RPO number, as the entry dominates every block (sdom) */
+	porec(f->eh_lp, &f->nblk);
 	porec(f->start, &f->nblk);
 	vgrow(&f->rpo, f->nblk);
 	for (p=&f->start; (b=*p);) {
@@ -152,6 +194,10 @@ filldom(Fn *fn)
 		for (n=1; n<fn->nblk; n++) {
 			b = fn->rpo[n];
 			d = 0;
+			/* the landing pad (eh.lp) has no predecessors: the unwinder enters it. It uses only the entry block's values
+			 * (nfcxx), so the entry dominates it */
+			if (b == fn->eh_lp)
+				d = fn->start;
 			for (p=0; p<b->npred; p++)
 				if (b->pred[p]->idom
 				||  b->pred[p] == fn->start)
@@ -217,6 +263,9 @@ fillfron(Fn *fn)
 		if (b->s2)
 			for (a=b; !sdom(a, b->s2); a=a->idom)
 				addfron(a, b->s2);
+		for (uint k=2; k<nsuccslot(b); k++)
+			for (a=b; !sdom(a, *succslot(b, k)); a=a->idom)
+				addfron(a, *succslot(b, k));
 	}
 }
 
@@ -336,11 +385,12 @@ simpljmp(Fn *fn)
 	uf = emalloc(fn->nblk * sizeof uf[0]);
 	for (b=fn->start; b; b=b->link) {
 		assert(!b->phi);
-		if (b->jmp.type == Jret0) {
+		/* a tail call (amd64/sysv.c) returns from its own block: its epilogue is there */
+		if (b->jmp.type == Jret0 && !b->tail) {
 			b->jmp.type = Jjmp;
 			b->s1 = ret;
 		}
-		if (b->nins == 0)
+		if (b->nins == 0 && !b->keep)
 		if (b->jmp.type == Jjmp) {
 			uffind(&b->s1, uf);
 			if (b->s1 != b)
@@ -352,6 +402,8 @@ simpljmp(Fn *fn)
 			uffind(&b->s1, uf);
 		if (b->s2)
 			uffind(&b->s2, uf);
+		for (uint k=2; k<nsuccslot(b); k++)
+			uffind(&b->tab[k-2], uf);
 		if (b->s1 && b->s1 == b->s2) {
 			b->jmp.type = Jjmp;
 			b->s2 = 0;
@@ -374,6 +426,9 @@ reachrec(Blk *b, Blk *to)
 		return 1;
 	if (reachrec(b->s2, to))
 		return 1;
+	for (uint k=2; k<nsuccslot(b); k++)
+		if (reachrec(*succslot(b, k), to))
+			return 1;
 
 	return 0;
 }
@@ -520,7 +575,9 @@ simplcfg(Fn *fn)
 			if (b->id == -1u)
 				continue;
 			j = &jmp[b->id];
-			if (j->type == Jjmp && j->s1->npred == 1) {
+			/* a jtab block or a kept target (its table holds the pointer) is not merged into its predecessor */
+			if (j->type == Jjmp && j->s1->npred == 1
+			&& jmp[j->s1->id].type != Jjtab && !j->s1->keep) {
 				assert(!j->s1->phi);
 				addbins(&b->ins, &b->nins, j->s1);
 				empty[b->id] &= empty[j->s1->id];

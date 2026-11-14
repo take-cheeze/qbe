@@ -100,6 +100,7 @@ static int ntmp;  /* current # of temps (for limit) */
 static int locs;  /* stack size used by locals */
 static int slot4; /* next slot of 4 bytes */
 static int slot8; /* ditto, 8 bytes */
+static int wideslot; /* the function has 256-bit vectors: a Kd slot is 32 bytes */
 static BSet mask[2][1]; /* class masks */
 
 static int
@@ -136,7 +137,16 @@ slot(int t)
 		 *
 		 * invariant: slot4 <= slot8
 		 */
-		if (KWIDE(tmp[t].cls)) {
+		if (tmp[t].cls == Kd) {
+			/* 16 bytes for every double: a vector (vec.c) is spilled whole, and an xmm copy of a
+			 * slot moves 16 bytes (amd64 emit); a scalar double uses the first 8 */
+			/* 32 bytes in a function with 256-bit vectors (vec.c -Y): every copy of a vector moves 32 */
+			int n = wideslot ? 8 : 4;
+			s = slot8;
+			if (slot4 == slot8)
+				slot4 += n;
+			slot8 += n;
+		} else if (KWIDE(tmp[t].cls)) {
 			s = slot8;
 			if (slot4 == slot8)
 				slot4 += 2;
@@ -232,14 +242,18 @@ reloads(BSet *u, BSet *v)
 
 	for (t=Tmp0; bsiter(u, &t); t++)
 		if (!bshas(v, t))
-			emit(Oload, tmp[t].cls, TMP(t), slot(t), R);
+			emit(tmp[t].vec == 2 ? Ovecload256 : tmp[t].vec ? Ovecload : Oload, tmp[t].cls, TMP(t), slot(t), R);
 }
 
 static void
 store(Ref r, int s)
 {
-	if (s != -1)
-		emit(Ostorew + tmp[r.val].cls, 0, R, r, SLOT(s));
+	if (s != -1) {
+		if (tmp[r.val].vec)
+			emit(tmp[r.val].vec == 2 ? Ovecstore256 : Ovecstore, Kw, R, r, SLOT(s));
+		else
+			emit(Ostorew + tmp[r.val].cls, 0, R, r, SLOT(s));
+	}
 }
 
 static int
@@ -344,6 +358,7 @@ spill(Fn *fn)
 	locs = fn->slot;
 	slot4 = 0;
 	slot8 = 0;
+	wideslot = fn->widevec;
 	for (t=0; t<ntmp; t++) {
 		k = 0;
 		if (t >= T.fpr0 && t < T.fpr0 + T.nfpr)
@@ -389,6 +404,18 @@ spill(Fn *fn)
 					limit(u, n, 0);
 				bsunion(v, u);
 			}
+		} else if (b->jmp.type == Jjtab) {
+			/* a jump table (nfcxx): the registers of its targets merge as for a branch; one register is kept for the
+			 * index, which the dispatch overwrites (amd64 isel copies the index into a temporary of its own) */
+			bszero(v);
+			for (k=0; k<nsuccslot(b); k++) {
+				Blk *sj = *succslot(b, k);
+				if (!sj)
+					continue;
+				liveon(w, b, sj);
+				merge(v, b, w, sj);
+			}
+			limit2(v, 1, 0, NULL);
 		} else if (s1) {
 			/* avoid reloading temporaries
 			 * in the middle of loops */
@@ -410,9 +437,11 @@ spill(Fn *fn)
 			t = b->jmp.arg.val;
 			assert(KBASE(tmp[t].cls) == 0);
 			bsset(v, t);
-			limit2(v, 0, 0, NULL);
-			if (!bshas(v, t))
-				b->jmp.arg = slot(t);
+			if (b->jmp.type != Jjtab) {
+				limit2(v, 0, 0, NULL);
+				if (!bshas(v, t))
+					b->jmp.arg = slot(t);
+			}
 		}
 		for (t=Tmp0; bsiter(b->out, &t); t++)
 			if (!bshas(v, t))

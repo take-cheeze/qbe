@@ -5,6 +5,15 @@
 
 Target T;
 
+int nofp;
+int nounwind;
+int absaddr;
+int vectorize;
+int vecassoc;
+int vecremarks;
+int vecavx;
+int veccost;
+static int code16;   /* -m16: i386 code run in real mode, as gcc -m16 makes it (.code16gcc) */
 char debug['Z'+1] = {
 	['P'] = 0, /* parsing */
 	['M'] = 0, /* memory optimization */
@@ -25,6 +34,8 @@ extern Target T_amd64_win;
 extern Target T_arm64;
 extern Target T_arm64_apple;
 extern Target T_rv64;
+extern Target T_i386;
+extern Target T_i386_regparm3;
 
 static Target *tlist[] = {
 	&T_amd64_sysv,
@@ -33,10 +44,13 @@ static Target *tlist[] = {
 	&T_arm64,
 	&T_arm64_apple,
 	&T_rv64,
+	&T_i386,
+	&T_i386_regparm3,
 	0
 };
 static FILE *outf;
 static int dbg;
+int pic;
 
 static void
 data(Dat *d)
@@ -96,6 +110,8 @@ func(Fn *fn)
 	simpl(fn);
 	fillcfg(fn);
 	filluse(fn);
+	if (vectorize)
+		vec(fn);
 	T.isel(fn);
 	fillcfg(fn);
 	filllive(fn);
@@ -137,7 +153,7 @@ main(int ac, char *av[])
 
 	T = Deftgt;
 	outf = stdout;
-	while ((c = getopt(ac, av, "hd:o:t:")) != -1)
+	while ((c = getopt(ac, av, "hd:m:no:pt:UAVFRYC")) != -1)
 		switch (c) {
 		case 'd':
 			for (; *optarg; optarg++)
@@ -145,6 +161,38 @@ main(int ac, char *av[])
 					debug[toupper(*optarg)] = 1;
 					dbg = 1;
 				}
+			break;
+		case 'n':
+			nofp = 1;
+			break;
+		case 'm':
+			if (strcmp(optarg, "16") != 0) {
+				fprintf(stderr, "unknown option -m%s\n", optarg);
+				exit(1);
+			}
+			code16 = 1;
+			break;
+		case 'U':
+			nounwind = 1;
+			break;
+		case 'V':
+			vectorize = 1;
+			break;
+		case 'F':
+			vecassoc = 1;
+			break;
+		case 'R':
+			vecremarks = 1;
+			break;
+		case 'Y':
+			vecavx = 1;
+			vectorize = 1;
+			break;
+		case 'C':
+			veccost = 1;
+			break;
+		case 'A':
+			absaddr = 1;
 			break;
 		case 'o':
 			if (strcmp(optarg, "-") != 0) {
@@ -154,6 +202,9 @@ main(int ac, char *av[])
 					exit(1);
 				}
 			}
+			break;
+		case 'p':
+			pic = 1;
 			break;
 		case 't':
 			if (strcmp(optarg, "?") == 0) {
@@ -177,6 +228,16 @@ main(int ac, char *av[])
 			fprintf(hf, "%s [OPTIONS] {file.ssa, -}\n", av[0]);
 			fprintf(hf, "\t%-11s prints this help\n", "-h");
 			fprintf(hf, "\t%-11s output to file\n", "-o file");
+			fprintf(hf, "\t%-11s no floating-point registers in integer code\n", "-n");
+			fprintf(hf, "\t%-11s no unwind tables\n", "-U");
+			fprintf(hf, "\t%-11s vectorize simple loops (amd64_sysv, SSE; vec.c)\n", "-V");
+			fprintf(hf, "\t%-11s with -V: float reductions too (reassociates them)\n", "-F");
+			fprintf(hf, "\t%-11s with -V: remarks on each loop (vectorized, or refused and where)\n", "-R");
+			fprintf(hf, "\t%-11s with -V: 256-bit (AVX2) vectors, or RVV on rv64, for simple loops\n", "-Y");
+			fprintf(hf, "\t%-11s with -V: vectorize loops the cost model calls unprofitable too\n", "-C");
+			fprintf(hf, "\t%-11s i386 code for real mode (.code16gcc, gcc's -m16)\n", "-m16");
+			fprintf(hf, "\t%-11s position independent (for a shared object):\n", "-p");
+			fprintf(hf, "\t%-11s thread-local symbols by initial exec\n", "");
 			fprintf(hf, "\t%-11s generate for a target among:\n", "-t <target>");
 			fprintf(hf, "\t%-11s ", "");
 			for (t=tlist, sep=""; *t; t++, sep=", ") {
@@ -188,6 +249,15 @@ main(int ac, char *av[])
 			fprintf(hf, "\t%-11s dump debug information\n", "-d <flags>");
 			exit(c != 'h');
 		}
+
+	if (code16) {
+		if (!T.ptr32) {
+			fprintf(stderr, "-m16 needs an i386 target\n");
+			exit(1);
+		}
+		/* gas adds the operand and address size prefixes */
+		fputs(".code16gcc\n", outf);
+	}
 
 	do {
 		f = av[optind];

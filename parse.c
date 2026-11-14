@@ -11,7 +11,6 @@ enum {
 	K0,
 
 	Ke = -2, /* erroneous mode */
-	Km = Kl, /* memory pointer */
 };
 
 Op optab[NOp] = {
@@ -53,6 +52,7 @@ enum Token {
 	Tphi,
 	Tjmp,
 	Tjnz,
+	Tjtab,
 	Tret,
 	Thlt,
 	Texport,
@@ -113,6 +113,7 @@ static char *kwmap[Ntok] = {
 	[Tphi] = "phi",
 	[Tjmp] = "jmp",
 	[Tjnz] = "jnz",
+	[Tjtab] = "jtab",
 	[Tret] = "ret",
 	[Thlt] = "hlt",
 	[Texport] = "export",
@@ -145,7 +146,7 @@ enum {
 	TMask = 16383, /* for temps hash */
 	BMask = 8191, /* for blocks hash */
 
-	K = 11183273, /* found using tools/lexh.c */
+	K = 20298703, /* found using tools/lexh.c */
 	M = 23,
 };
 
@@ -457,6 +458,11 @@ parseref()
 			}
 			break;
 		}
+		/* local exec cannot go in a shared object: with -p,
+		 * a thread-local symbol of this file is reached by
+		 * initial exec, as an extern one */
+		if (pic && (c.sym.type & SThr))
+			c.sym.type |= SExt;
 		if (tok != Tglo)
 			return R;
 		/* fall through */
@@ -536,6 +542,8 @@ parserefl(int arg)
 			hasenv = 1;
 			env = 1;
 			next();
+			if (T.ptr32)
+				err("environment arguments are not supported on %s", T.name);
 			k = Kl;
 			break;
 		default:
@@ -555,9 +563,9 @@ parserefl(int arg)
 				*curi = (Ins){Opare, k, r, {R}};
 		else if (k == Kc)
 			if (arg)
-				*curi = (Ins){Oargc, Kl, R, {TYPE(ty), r}};
+				*curi = (Ins){Oargc, Kptr, R, {TYPE(ty), r}};
 			else
-				*curi = (Ins){Oparc, Kl, r, {TYPE(ty)}};
+				*curi = (Ins){Oparc, Kptr, r, {TYPE(ty)}};
 		else if (k >= Ksb)
 			if (arg)
 				*curi = (Ins){Oargsb+(k-Ksb), Kw, R, {r}};
@@ -667,6 +675,33 @@ parseline(PState ps)
 	case Tjmp:
 		curb->jmp.type = Jjmp;
 		goto Jump;
+	case Tjtab:
+		/* jtab %index, @default, @target0, @target1, ...: an index below the count selects its target (nfcxx) */
+		curb->jmp.type = Jjtab;
+		r = parseref();
+		if (req(r, R))
+			err("invalid argument for jtab jump");
+		curb->jmp.arg = r;
+		expect(Tcomma);
+		expect(Tlbl);
+		curb->s1 = findblk();
+		if (curb->s1 == curf->start)
+			err("invalid jump to the start block");
+		while (peek() == Tcomma) {
+			next();
+			expect(Tlbl);
+			b = findblk();
+			if (b == curf->start || b == curb->s1)
+				err("invalid jtab target");
+			for (uint n=0; n<curb->ntab; n++)
+				if (curb->tab[n] == b)
+					err("repeated jtab target");
+			vgrow(&curb->tab, ++curb->ntab);
+			curb->tab[curb->ntab-1] = b;
+		}
+		if (curb->ntab == 0)
+			err("jtab without a table");
+		goto Close;
 	case Tjnz:
 		curb->jmp.type = Jjnz;
 		r = parseref();
@@ -716,7 +751,7 @@ parseline(PState ps)
 		op = Ocall;
 		expect(Tnl);
 		if (k == Kc) {
-			k = Kl;
+			k = Kptr;
 			arg[1] = TYPE(ty);
 		}
 		if (k >= Ksb)
@@ -729,6 +764,8 @@ parseline(PState ps)
 		op = Oload;
 	if (op == Talloc1 || op == Talloc2)
 		op = Oalloc;
+	if (isalloc(op) && k != Kptr)
+		err("alloc result must be of class %c (a pointer)", "wl"[Kptr]);
 	if (op == Ovastart && !curf->vararg)
 		err("cannot use vastart in non-variadic function");
 	if (k >= Ksb)
@@ -860,7 +897,7 @@ typecheck(Fn *fn)
 		}
 		for (i=b->ins; i<&b->ins[b->nins]; i++)
 			for (n=0; n<2; n++) {
-				k = optab[i->op].argcls[n][i->cls];
+				k = argcls(i, n);
 				r = i->arg[n];
 				t = &fn->tmp[r.val];
 				if (k == Ke)
@@ -884,7 +921,7 @@ typecheck(Fn *fn)
 		r = b->jmp.arg;
 		if (isret(b->jmp.type)) {
 			if (b->jmp.type == Jretc)
-				k = Kl;
+				k = Kptr;
 			else if (b->jmp.type >= Jretsb)
 				k = Kw;
 			else
@@ -922,7 +959,7 @@ parsefn(Lnk *lnk)
 		if (T.fpr0 <= i && i < T.fpr0 + T.nfpr)
 			newtmp(0, Kd, curf);
 		else
-			newtmp(0, Kl, curf);
+			newtmp(0, Kptr, curf);
 	curf->con[0].type = CBits;
 	curf->con[0].bits.i = 0xdeaddead;  /* UNDEF */
 	curf->con[1].type = CBits;
@@ -952,8 +989,15 @@ parsefn(Lnk *lnk)
 	curf->nmem = 0;
 	curf->nblk = nblk;
 	curf->rpo = vnew(nblk, sizeof curf->rpo[0], PFn);
-	for (b=curf->start; b; b=b->link)
+	curf->eh_lp = 0;
+	for (b=curf->start; b; b=b->link) {
 		b->dlink = 0; /* was trashed by findblk() */
+		if (strcmp(b->name, "eh.lp") == 0) {
+			if (curf->eh_lp)
+				err("multiple landing pads in @%s", curf->name);
+			curf->eh_lp = b;
+		}
+	}
 	for (i=0; i<BMask+1; ++i)
 		blkh[i] = 0;
 	memset(tmph, 0, tmphcap * sizeof tmph[0]);
@@ -970,7 +1014,8 @@ parsefields(Field *fld, Typ *ty, int t)
 
 	n = 0;
 	sz = 0;
-	al = ty->align;
+	/* an empty struct has no alignment yet (-1): 1 << -1 below is undefined */
+	al = ty->align < 0 ? 0 : ty->align;
 	while (t != Trbrace) {
 		ty1 = 0;
 		switch (t) {
@@ -985,7 +1030,7 @@ parsefields(Field *fld, Typ *ty, int t)
 			type = FTyp;
 			ty1 = &typ[findtyp(ntyp-1)];
 			s = ty1->size;
-			a = ty1->align;
+			a = ty1->align < 0 ? 0 : ty1->align;
 			break;
 		}
 		if (a > al)
@@ -1123,7 +1168,9 @@ parsedat(void cb(Dat *), Lnk *lnk)
 	if (t == Talign) {
 		if (nextnl() != Tint)
 			err("alignment expected");
-		if (tokval.num <= 0 || tokval.num > CHAR_MAX
+		/* up to 2^29, the largest #[repr(align)] of Rust
+		 * (crossbeam's CachePadded is 128) */
+		if (tokval.num <= 0 || tokval.num > (1 << 29)
 		|| (tokval.num & (tokval.num-1)) != 0)
 			err("invalid alignment");
 		lnk->align = tokval.num;
@@ -1395,6 +1442,7 @@ printfn(Fn *fn, FILE *f)
 				case Oxtest:
 				case Oxdiv:
 				case Oxidiv:
+				case Oxmul:
 					fputc(ktoc[i->cls], f);
 				}
 			if (!req(i->arg[0], R)) {
@@ -1429,6 +1477,14 @@ printfn(Fn *fn, FILE *f)
 			break;
 		case Jhlt:
 			fprintf(f, "\thlt\n");
+			break;
+		case Jjtab:
+			fprintf(f, "\tjtab ");
+			printref(b->jmp.arg, fn, f);
+			fprintf(f, ", @%s", b->s1->name);
+			for (uint n=0; n<b->ntab; n++)
+				fprintf(f, ", @%s", b->tab[n]->name);
+			fprintf(f, "\n");
 			break;
 		case Jjmp:
 			if (b->s1 != b->link)

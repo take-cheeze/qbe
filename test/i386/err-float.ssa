@@ -1,0 +1,7 @@
+# error: floating point
+export function w $f(w %a) {
+@start
+	%b =d swtof %a
+	%c =w dtosi %b
+	ret %c
+}

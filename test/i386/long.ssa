@@ -1,0 +1,526 @@
+# 64-bit integers (class l) as pairs of words: every operation
+# against gcc's, over a table of values
+
+export function l $l_add(l %a, l %b) {
+@start
+	%r =l add %a, %b
+	ret %r
+}
+
+export function l $l_sub(l %a, l %b) {
+@start
+	%r =l sub %a, %b
+	ret %r
+}
+
+export function l $l_mul(l %a, l %b) {
+@start
+	%r =l mul %a, %b
+	ret %r
+}
+
+export function l $l_and(l %a, l %b) {
+@start
+	%r =l and %a, %b
+	ret %r
+}
+
+export function l $l_or(l %a, l %b) {
+@start
+	%r =l or %a, %b
+	ret %r
+}
+
+export function l $l_xor(l %a, l %b) {
+@start
+	%r =l xor %a, %b
+	ret %r
+}
+
+export function l $l_div(l %a, l %b) {
+@start
+	%r =l div %a, %b
+	ret %r
+}
+
+export function l $l_rem(l %a, l %b) {
+@start
+	%r =l rem %a, %b
+	ret %r
+}
+
+export function l $l_udiv(l %a, l %b) {
+@start
+	%r =l udiv %a, %b
+	ret %r
+}
+
+export function l $l_urem(l %a, l %b) {
+@start
+	%r =l urem %a, %b
+	ret %r
+}
+
+export function w $l_ceql(l %a, l %b) {
+@start
+	%r =w ceql %a, %b
+	ret %r
+}
+
+export function w $l_cnel(l %a, l %b) {
+@start
+	%r =w cnel %a, %b
+	ret %r
+}
+
+export function w $l_csltl(l %a, l %b) {
+@start
+	%r =w csltl %a, %b
+	ret %r
+}
+
+export function w $l_cslel(l %a, l %b) {
+@start
+	%r =w cslel %a, %b
+	ret %r
+}
+
+export function w $l_csgtl(l %a, l %b) {
+@start
+	%r =w csgtl %a, %b
+	ret %r
+}
+
+export function w $l_csgel(l %a, l %b) {
+@start
+	%r =w csgel %a, %b
+	ret %r
+}
+
+export function w $l_cultl(l %a, l %b) {
+@start
+	%r =w cultl %a, %b
+	ret %r
+}
+
+export function w $l_culel(l %a, l %b) {
+@start
+	%r =w culel %a, %b
+	ret %r
+}
+
+export function w $l_cugtl(l %a, l %b) {
+@start
+	%r =w cugtl %a, %b
+	ret %r
+}
+
+export function w $l_cugel(l %a, l %b) {
+@start
+	%r =w cugel %a, %b
+	ret %r
+}
+
+export function l $l_shl(l %a, w %n) {
+@start
+	%r =l shl %a, %n
+	ret %r
+}
+
+export function l $l_shl0(l %a) {
+@start
+	%r =l shl %a, 0
+	ret %r
+}
+
+export function l $l_shl1(l %a) {
+@start
+	%r =l shl %a, 1
+	ret %r
+}
+
+export function l $l_shl5(l %a) {
+@start
+	%r =l shl %a, 5
+	ret %r
+}
+
+export function l $l_shl31(l %a) {
+@start
+	%r =l shl %a, 31
+	ret %r
+}
+
+export function l $l_shl32(l %a) {
+@start
+	%r =l shl %a, 32
+	ret %r
+}
+
+export function l $l_shl33(l %a) {
+@start
+	%r =l shl %a, 33
+	ret %r
+}
+
+export function l $l_shl40(l %a) {
+@start
+	%r =l shl %a, 40
+	ret %r
+}
+
+export function l $l_shl63(l %a) {
+@start
+	%r =l shl %a, 63
+	ret %r
+}
+
+export function l $l_shr(l %a, w %n) {
+@start
+	%r =l shr %a, %n
+	ret %r
+}
+
+export function l $l_shr0(l %a) {
+@start
+	%r =l shr %a, 0
+	ret %r
+}
+
+export function l $l_shr1(l %a) {
+@start
+	%r =l shr %a, 1
+	ret %r
+}
+
+export function l $l_shr5(l %a) {
+@start
+	%r =l shr %a, 5
+	ret %r
+}
+
+export function l $l_shr31(l %a) {
+@start
+	%r =l shr %a, 31
+	ret %r
+}
+
+export function l $l_shr32(l %a) {
+@start
+	%r =l shr %a, 32
+	ret %r
+}
+
+export function l $l_shr33(l %a) {
+@start
+	%r =l shr %a, 33
+	ret %r
+}
+
+export function l $l_shr40(l %a) {
+@start
+	%r =l shr %a, 40
+	ret %r
+}
+
+export function l $l_shr63(l %a) {
+@start
+	%r =l shr %a, 63
+	ret %r
+}
+
+export function l $l_sar(l %a, w %n) {
+@start
+	%r =l sar %a, %n
+	ret %r
+}
+
+export function l $l_sar0(l %a) {
+@start
+	%r =l sar %a, 0
+	ret %r
+}
+
+export function l $l_sar1(l %a) {
+@start
+	%r =l sar %a, 1
+	ret %r
+}
+
+export function l $l_sar5(l %a) {
+@start
+	%r =l sar %a, 5
+	ret %r
+}
+
+export function l $l_sar31(l %a) {
+@start
+	%r =l sar %a, 31
+	ret %r
+}
+
+export function l $l_sar32(l %a) {
+@start
+	%r =l sar %a, 32
+	ret %r
+}
+
+export function l $l_sar33(l %a) {
+@start
+	%r =l sar %a, 33
+	ret %r
+}
+
+export function l $l_sar40(l %a) {
+@start
+	%r =l sar %a, 40
+	ret %r
+}
+
+export function l $l_sar63(l %a) {
+@start
+	%r =l sar %a, 63
+	ret %r
+}
+
+export function l $l_neg(l %a) {
+@start
+	%r =l neg %a
+	ret %r
+}
+
+export function l $l_ext(w %w, w %k) {
+@start
+	%a =l extsw %w
+	%b =l extuw %w
+	%c =l extsb %w
+	%d =l extub %w
+	%e =l extsh %w
+	%f =l extuh %w
+	%r =l copy %a
+	%k2 =l extsw %k
+	%m =l mul %k2, 7
+	%r =l xor %r, %b
+	%r =l add %r, %c
+	%r =l sub %r, %d
+	%r =l xor %r, %e
+	%r =l add %r, %f
+	%r =l add %r, %m
+	ret %r
+}
+
+# loads and stores, of longs and of narrower values into longs
+export function l $l_mem(w %p, w %q) {
+@start
+	%a =l loadl %p
+	%p4 =w add %p, 8
+	%b =l loadsw %p4
+	%c =l loaduw %p4
+	%d =l loadsb %p4
+	%e =l loaduh %p4
+	%s =l add %a, %b
+	%s =l xor %s, %c
+	%s =l add %s, %d
+	%s =l add %s, %e
+	storel %s, %q
+	%q8 =w add %q, 8
+	storel 81985529216486895, %q8
+	%t =w copy %s
+	%q16 =w add %q, 16
+	storew %t, %q16
+	ret %s
+}
+
+# loops: longs in phis
+export function l $l_sum(w %p, w %n) {
+@start
+	%s =l copy 0
+	%i =w copy 0
+@loop
+	%c =w csltw %i, %n
+	jnz %c, @body, @end
+@body
+	%o =w mul %i, 8
+	%q =w add %p, %o
+	%v =l loadl %q
+	%s =l add %s, %v
+	%i =w add %i, 1
+	jmp @loop
+@end
+	ret %s
+}
+
+export function l $l_fact(w %n) {
+@start
+	%r =l copy 1
+	%k =l extsw %n
+@loop
+	%c =w csgtl %k, 1
+	jnz %c, @body, @end
+@body
+	%r =l mul %r, %k
+	%k =l sub %k, 1
+	jmp @loop
+@end
+	ret %r
+}
+
+# a long tested by jnz (its low word, as for any word use)
+export function w $l_jnz(l %a) {
+@start
+	jnz %a, @t, @f
+@t
+	ret 1
+@f
+	ret 0
+}
+
+# arguments: a long goes in two registers when two remain
+# (regparm), else on the stack with all that follow
+export function l $l_args(w %a, l %b, w %c, l %d) {
+@start
+	%r =l extsw %a
+	%r =l add %r, %b
+	%x =l extsw %c
+	%x =l mul %x, 1000
+	%r =l add %r, %x
+	%r =l xor %r, %d
+	ret %r
+}
+
+export function l $l_args2(w %a, w %b, l %c, w %d) {
+@start
+	%x =l extsw %a
+	%y =l extsw %b
+	%z =l extsw %d
+	%r =l add %x, %c
+	%r =l mul %r, %y
+	%r =l sub %r, %z
+	ret %r
+}
+
+export function l $l_va(w %n, ...) {
+@start
+	%ap =w alloc4 4
+	vastart %ap
+	%a =l vaarg %ap
+	%b =w vaarg %ap
+	%c =l vaarg %ap
+	%x =l extsw %b
+	%r =l add %a, %x
+	%r =l mul %r, %c
+	ret %r
+}
+
+export function l $l_calls(l %a) {
+@start
+	%x =l call $c_args(w 1, l %a, w 3, l 81985529216486895)
+	%y =l call $c_args2(w 5, w 6, l %a, w 7)
+	%z =l call $c_va(w 3, ..., l %a, w -9, l 4294967296)
+	%r =l add %x, %y
+	%r =l xor %r, %z
+	ret %r
+}
+
+# >>> driver
+# #include "rt.h"
+# typedef long long ll; typedef unsigned long long ull;
+# ll l_add(ll, ll);
+# ll l_sub(ll, ll);
+# ll l_mul(ll, ll);
+# ll l_and(ll, ll);
+# ll l_or(ll, ll);
+# ll l_xor(ll, ll);
+# ll l_div(ll, ll);
+# ll l_rem(ll, ll);
+# ll l_udiv(ll, ll);
+# ll l_urem(ll, ll);
+# int l_ceql(ll, ll);
+# int l_cnel(ll, ll);
+# int l_csltl(ll, ll);
+# int l_cslel(ll, ll);
+# int l_csgtl(ll, ll);
+# int l_csgel(ll, ll);
+# int l_cultl(ll, ll);
+# int l_culel(ll, ll);
+# int l_cugtl(ll, ll);
+# int l_cugel(ll, ll);
+# ll l_shl(ll, int);
+# ll l_shl0(ll);
+# ll l_shl1(ll);
+# ll l_shl5(ll);
+# ll l_shl31(ll);
+# ll l_shl32(ll);
+# ll l_shl33(ll);
+# ll l_shl40(ll);
+# ll l_shl63(ll);
+# ll l_shr(ll, int);
+# ll l_shr0(ll);
+# ll l_shr1(ll);
+# ll l_shr5(ll);
+# ll l_shr31(ll);
+# ll l_shr32(ll);
+# ll l_shr33(ll);
+# ll l_shr40(ll);
+# ll l_shr63(ll);
+# ll l_sar(ll, int);
+# ll l_sar0(ll);
+# ll l_sar1(ll);
+# ll l_sar5(ll);
+# ll l_sar31(ll);
+# ll l_sar32(ll);
+# ll l_sar33(ll);
+# ll l_sar40(ll);
+# ll l_sar63(ll);
+# ll l_neg(ll); ll l_ext(int, int); ll l_mem(void *, void *); ll l_sum(ll *, int); ll l_fact(int); int l_jnz(ll);
+# ll l_args(int, ll, int, ll); ll l_args2(int, int, ll, int); ll l_va(int, ...); ll l_calls(ll);
+# ll c_args(int a, ll b, int c, ll d) { return ((ll)a + b + (ll)c * 1000) ^ d; }
+# ll c_args2(int a, int b, ll c, int d) { return (a + c) * b - d; }
+# ll c_va(int n, ...) { __builtin_va_list ap; ll a, c; int b; __builtin_va_start(ap, n); a = __builtin_va_arg(ap, ll); b = __builtin_va_arg(ap, int); c = __builtin_va_arg(ap, ll); __builtin_va_end(ap); return (a + b) * c; }
+# static int nbad;
+# static void chk(const char *what, int i, int j, ull got, ull want) {
+# 	if (got == want) return;
+# 	if (nbad++ > 20) return;
+# 	rt_puts("FAIL "); rt_puts(what); rt_puts(" "); rt_putd(i); rt_puts(" "); rt_putd(j);
+# 	rt_puts(": "); rt_putx64(got); rt_puts(" != "); rt_putx64(want); rt_puts("\n");
+# }
+# #define C(f, e) chk(#f, i, j, f, e)
+# int main(void) {
+# 	static ll v[] = { 0, 1, -1, 2, -2, 7, -7, 0x7fffffff, 0x80000000ll, -0x80000000ll, 0xffffffffll, 0x100000000ll,
+# 		0x123456789abcdefll, -0x123456789abcdefll, 0x7fffffffffffffffll, (ll)0x8000000000000000ull, 1000000007, 0xfffffffeffffffffll,
+# 		12345678912345ll, -98765 };
+# 	int n = sizeof v / sizeof v[0], i, j;
+# 	ll m[4] = { 0x1122334455667788ll, -1, 0, 0 }; ll q[3]; ll arr[5] = { 1, -1, 0x100000000ll, 0x7fffffffffffffffll, 3 };
+# 	for (i = 0; i < n; i++) {
+# 		ll a = v[i]; ull ua = a;
+# 		C(l_neg(a), -ua); C(l_jnz(a), (int)a != 0);
+# 		for (j = 0; j < n; j++) {
+# 			ll b = v[j]; ull ub = b;
+# 			C(l_add(a, b), ua + ub); C(l_sub(a, b), ua - ub); C(l_mul(a, b), ua * ub);
+# 			C(l_and(a, b), a & b); C(l_or(a, b), a | b); C(l_xor(a, b), a ^ b);
+# 			if (b && !(a == (ll)0x8000000000000000ull && b == -1)) { C(l_div(a, b), a / b); C(l_rem(a, b), a % b); }
+# 			if (b) { C(l_udiv(a, b), ua / ub); C(l_urem(a, b), ua % ub); }
+# 			C(l_ceql(a, b), a == b); C(l_cnel(a, b), a != b); C(l_csltl(a, b), a < b); C(l_cslel(a, b), a <= b);
+# 			C(l_csgtl(a, b), a > b); C(l_csgel(a, b), a >= b); C(l_cultl(a, b), ua < ub); C(l_culel(a, b), ua <= ub);
+# 			C(l_cugtl(a, b), ua > ub); C(l_cugel(a, b), ua >= ub);
+# 		}
+# 		for (j = 0; j < 64; j++) { C(l_shl(a, j), ua << j); C(l_shr(a, j), ua >> j); C(l_sar(a, j), a >> j); }
+# 		j = 0;
+# 		C(l_shl0(a), ua << 0); C(l_shl1(a), ua << 1); C(l_shl5(a), ua << 5); C(l_shl31(a), ua << 31); C(l_shl32(a), ua << 32); C(l_shl33(a), ua << 33); C(l_shl40(a), ua << 40); C(l_shl63(a), ua << 63);
+# 		C(l_shr0(a), ua >> 0); C(l_shr1(a), ua >> 1); C(l_shr5(a), ua >> 5); C(l_shr31(a), ua >> 31); C(l_shr32(a), ua >> 32); C(l_shr33(a), ua >> 33); C(l_shr40(a), ua >> 40); C(l_shr63(a), ua >> 63);
+# 		C(l_sar0(a), a >> 0); C(l_sar1(a), a >> 1); C(l_sar5(a), a >> 5); C(l_sar31(a), a >> 31); C(l_sar32(a), a >> 32); C(l_sar33(a), a >> 33); C(l_sar40(a), a >> 40); C(l_sar63(a), a >> 63);
+# 		C(l_ext((int)a, (int)(a >> 3)), (((ll)(int)a ^ (ll)(unsigned)a) + (ll)(signed char)a - (ll)(unsigned char)a ^ (ll)(short)a) + (ll)(unsigned short)a + (ll)(int)(a >> 3) * 7);
+# 		C(l_calls(a), (c_args(1, a, 3, 0x123456789abcdefll) + c_args2(5, 6, a, 7)) ^ c_va(3, a, -9, 0x100000000ll));
+# 		C(l_args(i, a, -i, v[n - 1 - i]), c_args(i, a, -i, v[n - 1 - i]));
+# 		C(l_args2(i, 3, a, 4), c_args2(i, 3, a, 4));
+# 		C(l_va(2, a, 5, v[n - 1 - i]), c_va(2, a, 5, v[n - 1 - i]));
+# 	}
+# 	i = j = 0;
+# 	*(int *)&m[1] = -5;
+# 	C(l_mem(m, q), (ull)(((m[0] + (ll)(int)-5) ^ (ll)(unsigned)-5) + (ll)(signed char)-5 + (ll)(unsigned short)-5));
+# 	C(q[0], l_mem(m, q)); C(q[1], 0x123456789abcdefll); C((int)q[2], (int)q[0]);
+# 	C(l_sum(arr, 5), arr[0] + arr[1] + arr[2] + arr[3] + arr[4]);
+# 	C(l_fact(20), 2432902008176640000ll);
+# 	return nbad != 0;
+# }
+# <<<

@@ -307,6 +307,73 @@ fixmem(Ref *pr, Fn *fn, FILE *f)
 	}
 }
 
+/* the vector ops (vec.c, -Y): four e32 lanes in a v register; the vector registers are numbered as the
+ * FP registers (a vector temporary takes an FP number, which is its v number) */
+#define VREG(r) ((r).val - FT0)
+
+static void
+vsetvl(FILE *f)
+{
+	fputs("\tvsetivli zero, 4, e32, m1, ta, ma\n", f);
+}
+
+/* the address of a vector load or store, in a register: a temporary's own, or t6 for a slot or a symbol */
+static char *
+vecaddr(Ref r, Fn *fn, FILE *f)
+{
+	int64_t off;
+
+	switch (rtype(r)) {
+	case RTmp:
+		return rname[r.val];
+	case RSlot:
+		off = slot(r, fn);
+		assert(off >= -2048 && off <= 2047);
+		fprintf(f, "\taddi t6, fp, %d\n", (int)off);
+		return "t6";
+	case RCon:
+		assert(fn->con[r.val].type == CAddr);
+		fputs("\tlla t6, ", f);
+		emitaddr(&fn->con[r.val], f);
+		fputc('\n', f);
+		return "t6";
+	default:
+		die("invalid vector address");
+	}
+	return 0;
+}
+
+/* the vector mask (v0, the FP register FT0 that the allocator never uses) to all-ones lanes where set */
+static void
+vecmask(Ins *i, FILE *f)
+{
+	fprintf(f, "\tvmv.v.i v%d, 0\n", VREG(i->to));
+	fprintf(f, "\tvmerge.vim v%d, v%d, -1, v0\n", VREG(i->to), VREG(i->to));
+}
+
+/* two doubles per vector: e64 with vl=2 (the element width of the double ops; loads, stores and copies move 16 bytes
+ * either way) */
+static void
+vsetvl64(FILE *f)
+{
+	fputs("\tvsetivli zero, 2, e64, m1, ta, ma\n", f);
+}
+
+static void
+vecmask64(Ins *i, FILE *f)
+{
+	fprintf(f, "\tvmv.v.i v%d, 0\n", VREG(i->to));
+	fprintf(f, "\tvmerge.vim v%d, v%d, -1, v0\n", VREG(i->to), VREG(i->to));
+}
+
+/* a two-source vector op: vd = vop(va, vb) */
+static void
+vecbin(char *mn, Ins *i, FILE *f)
+{
+	vsetvl(f);
+	fprintf(f, "\t%s v%d, v%d, v%d\n", mn, VREG(i->to), VREG(i->arg[0]), VREG(i->arg[1]));
+}
+
 static void
 emitins(Ins *i, Fn *fn, FILE *f)
 {
@@ -316,6 +383,136 @@ emitins(Ins *i, Fn *fn, FILE *f)
 	Con *con;
 
 	switch (i->op) {
+	case Ovecload:
+		vsetvl(f);
+		fprintf(f, "\tvle32.v v%d, (%s)\n", VREG(i->to), vecaddr(i->arg[0], fn, f));
+		break;
+	case Ovecstore:
+		vsetvl(f);
+		fprintf(f, "\tvse32.v v%d, (%s)\n", VREG(i->arg[0]), vecaddr(i->arg[1], fn, f));
+		break;
+	case Ovecbcastw:
+		vsetvl(f);
+		fprintf(f, "\tvmv.v.x v%d, %s\n", VREG(i->to), rname[i->arg[0].val]);
+		break;
+	case Ovecbcasts:
+		vsetvl(f);
+		fprintf(f, "\tvfmv.v.f v%d, %s\n", VREG(i->to), rname[i->arg[0].val]);
+		break;
+	case Ovecceqw:
+		vsetvl(f);
+		fprintf(f, "\tvmseq.vv v0, v%d, v%d\n", VREG(i->arg[0]), VREG(i->arg[1]));
+		vecmask(i, f);
+		break;
+	case Ovecgtw:	/* a > b is b < a */
+		vsetvl(f);
+		fprintf(f, "\tvmslt.vv v0, v%d, v%d\n", VREG(i->arg[1]), VREG(i->arg[0]));
+		vecmask(i, f);
+		break;
+	case Ovecfeqs:
+		vsetvl(f);
+		fprintf(f, "\tvmfeq.vv v0, v%d, v%d\n", VREG(i->arg[0]), VREG(i->arg[1]));
+		vecmask(i, f);
+		break;
+	case Ovecflts:
+		vsetvl(f);
+		fprintf(f, "\tvmflt.vv v0, v%d, v%d\n", VREG(i->arg[0]), VREG(i->arg[1]));
+		vecmask(i, f);
+		break;
+	case Ovecfles:
+		vsetvl(f);
+		fprintf(f, "\tvmfle.vv v0, v%d, v%d\n", VREG(i->arg[0]), VREG(i->arg[1]));
+		vecmask(i, f);
+		break;
+	case Ovecandn:	/* ~a & b: the not in v31 (ft11, never allocated: the scratch), then the and */
+		vsetvl(f);
+		fprintf(f, "\tvxor.vi v31, v%d, -1\n", VREG(i->arg[0]));
+		fprintf(f, "\tvand.vv v%d, v31, v%d\n", VREG(i->to), VREG(i->arg[1]));
+		break;
+	case Ovecload8:		/* two int lanes: 8 bytes, so vl=2 */
+		fputs("\tvsetivli zero, 2, e32, m1, ta, ma\n", f);
+		fprintf(f, "\tvle32.v v%d, (%s)\n", VREG(i->to), vecaddr(i->arg[0], fn, f));
+		break;
+	case Ovecstore8:
+		fputs("\tvsetivli zero, 2, e32, m1, ta, ma\n", f);
+		fprintf(f, "\tvse32.v v%d, (%s)\n", VREG(i->arg[0]), vecaddr(i->arg[1], fn, f));
+		break;
+	case Ovecw2d:		/* two int lanes to two doubles: sign-extend to 64 bits, then convert */
+		vsetvl64(f);
+		fprintf(f, "\tvsext.vf2 v31, v%d\n", VREG(i->arg[0]));	/* a widening op may not overlap its source */
+		fprintf(f, "\tvfcvt.f.x.v v%d, v31\n", VREG(i->to));
+		break;
+	case Ovecd2w:		/* two doubles to two int lanes, truncated: convert to 64 bits, then narrow */
+		vsetvl64(f);
+		fprintf(f, "\tvfcvt.rtz.x.f.v v31, v%d\n", VREG(i->arg[0]));
+		fputs("\tvsetivli zero, 2, e32, mf2, ta, ma\n", f);	/* the narrowing source is one register: the destination is half */
+		fprintf(f, "\tvnsrl.wi v%d, v31, 0\n", VREG(i->to));
+		break;
+	case Ovecloadst:	/* the even elements: an 8-byte stride from the address (t6 holds the stride) */
+		vsetvl(f);
+		fprintf(f, "\tli t6, 8\n");
+		fprintf(f, "\tvlse32.v v%d, (%s), t6\n", VREG(i->to), rname[i->arg[0].val]);
+		break;
+	case Ovecstorest:
+		vsetvl(f);
+		fprintf(f, "\tli t6, 8\n");
+		fprintf(f, "\tvsse32.v v%d, (%s), t6\n", VREG(i->arg[0]), rname[i->arg[1].val]);
+		break;
+	case Ovecloadstd:	/* two doubles at a 16-byte stride: the even elements of a window */
+		vsetvl64(f);
+		fprintf(f, "\tli t6, 16\n");
+		fprintf(f, "\tvlse64.v v%d, (%s), t6\n", VREG(i->to), rname[i->arg[0].val]);
+		break;
+	case Ovecstorestd:
+		vsetvl64(f);
+		fprintf(f, "\tli t6, 16\n");
+		fprintf(f, "\tvsse64.v v%d, (%s), t6\n", VREG(i->arg[0]), rname[i->arg[1].val]);
+		break;
+	case Ovecaddd:
+		vsetvl64(f);
+		fprintf(f, "\tvfadd.vv v%d, v%d, v%d\n", VREG(i->to), VREG(i->arg[0]), VREG(i->arg[1]));
+		break;
+	case Ovecsubd:
+		vsetvl64(f);
+		fprintf(f, "\tvfsub.vv v%d, v%d, v%d\n", VREG(i->to), VREG(i->arg[0]), VREG(i->arg[1]));
+		break;
+	case Ovecmuld:
+		vsetvl64(f);
+		fprintf(f, "\tvfmul.vv v%d, v%d, v%d\n", VREG(i->to), VREG(i->arg[0]), VREG(i->arg[1]));
+		break;
+	case Ovecdivd:
+		vsetvl64(f);
+		fprintf(f, "\tvfdiv.vv v%d, v%d, v%d\n", VREG(i->to), VREG(i->arg[0]), VREG(i->arg[1]));
+		break;
+	case Ovecbcastd:
+		vsetvl64(f);
+		fprintf(f, "\tvfmv.v.f v%d, %s\n", VREG(i->to), rname[i->arg[0].val]);
+		break;
+	case Ovecfeqd:
+		vsetvl64(f);
+		fprintf(f, "\tvmfeq.vv v0, v%d, v%d\n", VREG(i->arg[0]), VREG(i->arg[1]));
+		vecmask64(i, f);
+		break;
+	case Ovecfltd:
+		vsetvl64(f);
+		fprintf(f, "\tvmflt.vv v0, v%d, v%d\n", VREG(i->arg[0]), VREG(i->arg[1]));
+		vecmask64(i, f);
+		break;
+	case Ovecfled:
+		vsetvl64(f);
+		fprintf(f, "\tvmfle.vv v0, v%d, v%d\n", VREG(i->arg[0]), VREG(i->arg[1]));
+		vecmask64(i, f);
+		break;
+	case Ovecaddw:  vecbin("vadd.vv", i, f); break;
+	case Ovecsubw:  vecbin("vsub.vv", i, f); break;
+	case Ovecmulw:  vecbin("vmul.vv", i, f); break;
+	case Ovecandw:  vecbin("vand.vv", i, f); break;
+	case Ovecorw:   vecbin("vor.vv", i, f); break;
+	case Ovecxorw:  vecbin("vxor.vv", i, f); break;
+	case Ovecadds:  vecbin("vfadd.vv", i, f); break;
+	case Ovecsubs:  vecbin("vfsub.vv", i, f); break;
+	case Ovecmuls:  vecbin("vfmul.vv", i, f); break;
+	case Ovecdivs:  vecbin("vfdiv.vv", i, f); break;
 	default:
 		if (isload(i->op))
 			fixmem(&i->arg[0], fn, f);
@@ -341,6 +538,12 @@ emitins(Ins *i, Fn *fn, FILE *f)
 	case Ocopy:
 		if (req(i->to, i->arg[0]))
 			break;
+		if (fn->widevec && i->cls == Kd && isreg(i->to) && isreg(i->arg[0])) {
+			/* a copy of an FP register number may be a vector's (its v register, the same number):
+			 * the vector copy too; the FP copy below is the scalar one */
+			vsetvl(f);
+			fprintf(f, "\tvmv.v.v v%d, v%d\n", VREG(i->to), VREG(i->arg[0]));
+		}
 		if (rtype(i->to) == RSlot) {
 			switch (rtype(i->arg[0])) {
 			case RSlot:

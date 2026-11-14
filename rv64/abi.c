@@ -140,9 +140,6 @@ typclass(Class *c, Typ *t, int fpabi, int *gp, int *fp)
 	c->ngp = 0;
 	c->nfp = 0;
 
-	if (t->align > 4)
-		err("alignments larger than 16 are not supported");
-
 	if (t->isdark || t->size > 16 || t->size == 0) {
 		/* large structs are replaced by a
 		 * pointer to some caller-allocated
@@ -322,17 +319,18 @@ static void
 stkblob(Ref r, Typ *t, Fn *fn, Insl **ilp)
 {
 	Insl *il;
-	int al;
+	Ins ins[3];
+	int i, n;
 	uint64_t sz;
 
-	il = alloc(sizeof *il);
-	al = t->align - 2; /* specific to NAlign == 3 */
-	if (al < 0)
-		al = 0;
 	sz = (t->size + 7) & ~7;
-	il->i = (Ins){Oalloc+al, Kl, r, {getcon(sz, fn)}};
-	il->link = *ilp;
-	*ilp = il;
+	n = stkalloc(ins, r, t->align, sz, fn);
+	for (i=0; i<n; i++) {
+		il = alloc(sizeof *il);
+		il->i = ins[i];
+		il->link = *ilp;
+		*ilp = il;
+	}
 }
 
 static void

@@ -172,6 +172,23 @@ selcmp(Ins i, int k, int op, Fn *fn)
 	fixarg(&icmp->arg[1], k, icmp, fn);
 }
 
+/* the vector ops of vec.c (-Y) */
+static int
+isvecop(int op)
+{
+	switch (op) {
+	case Ovecload: case Ovecstore: case Ovecbcastw: case Ovecbcasts:
+	case Ovecaddw: case Ovecsubw: case Ovecmulw: case Ovecandw: case Ovecorw: case Ovecxorw:
+	case Ovecadds: case Ovecsubs: case Ovecmuls: case Ovecdivs:
+	case Ovecceqw: case Ovecgtw: case Ovecandn: case Ovecfeqs: case Ovecflts: case Ovecfles:
+	case Ovecloadst: case Ovecstorest: case Ovecloadstd: case Ovecstorestd: case Ovecload8: case Ovecstore8: case Ovecw2d: case Ovecd2w:
+	case Ovecaddd: case Ovecsubd: case Ovecmuld: case Ovecdivd: case Ovecbcastd:
+	case Ovecfeqd: case Ovecfltd: case Ovecfled:
+		return 1;
+	}
+	return 0;
+}
+
 static void
 sel(Ins i, Fn *fn)
 {
@@ -188,6 +205,17 @@ sel(Ins i, Fn *fn)
 		selcmp(i, ck, cc, fn);
 		return;
 	}
+	if (isvecop(i.op)) {
+		/* the vector ops (vec.c) have the classes their operands have; only an address may be a slot
+		 * (an alloca's), which fixarg turns into its address */
+		emiti(i);
+		i0 = curi;
+		if (i.op == Ovecload || i.op == Ovecloadst || i.op == Ovecload8 || i.op == Ovecloadstd)
+			fixarg(&i0->arg[0], Kl, i0, fn);
+		if (i.op == Ovecstore || i.op == Ovecstorest || i.op == Ovecstore8 || i.op == Ovecstorestd)
+			fixarg(&i0->arg[1], Kl, i0, fn);
+		return;
+	}
 	if (i.op != Onop) {
 		emiti(i);
 		i0 = curi; /* fixarg() can change curi */
@@ -199,6 +227,8 @@ sel(Ins i, Fn *fn)
 static void
 seljmp(Blk *b, Fn *fn)
 {
+	if (b->jmp.type == Jjtab)
+		die("jtab (nfcxx): only the amd64 target has jump tables");
 	/* TODO: replace cmp+jnz with beq/bne/blt[u]/bge[u] */
 	if (b->jmp.type == Jjnz)
 		fixarg(&b->jmp.arg, Kw, 0, fn);

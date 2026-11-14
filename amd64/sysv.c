@@ -302,9 +302,9 @@ rarg(int ty, int *ni, int *ns)
 static void
 selcall(Fn *fn, Ins *i0, Ins *i1, RAlloc **rap)
 {
-	Ins *i;
+	Ins *i, ains[3];
 	AClass *ac, *a, aret;
-	int ca, ni, ns, al;
+	int ca, ni, ns, al, n;
 	uint stk, off;
 	Ref r, r1, r2, reg[2], env;
 	RAlloc *ra;
@@ -321,10 +321,12 @@ selcall(Fn *fn, Ins *i0, Ins *i1, RAlloc **rap)
 
 	for (stk=0, a=&ac[i1-i0]; a>ac;)
 		if ((--a)->inmem) {
-			if (a->align > 4)
-				err("sysv abi requires alignments of 16 or less");
+			/* a stack argument aligned on more
+			 * than 16 is placed as one on 16,
+			 * as gcc does since 4.6
+			 */
 			stk += a->size;
-			if (a->align == 4)
+			if (a->align >= 4)
 				stk += stk & 15;
 		}
 	stk += stk & 15;
@@ -360,12 +362,13 @@ selcall(Fn *fn, Ins *i0, Ins *i1, RAlloc **rap)
 			r1 = i1->to;
 		}
 		/* allocate return pad */
-		ra = alloc(sizeof *ra);
-		/* specific to NAlign == 3 */
-		al = aret.align >= 2 ? aret.align - 2 : 0;
-		ra->i = (Ins){Oalloc+al, Kl, r1, {getcon(aret.size, fn)}};
-		ra->link = (*rap);
-		*rap = ra;
+		n = stkalloc(ains, r1, aret.align, aret.size, fn);
+		for (al=0; al<n; al++) {
+			ra = alloc(sizeof *ra);
+			ra->i = ains[al];
+			ra->link = (*rap);
+			*rap = ra;
+		}
 	} else {
 		ra = 0;
 		if (KBASE(i1->cls) == 0) {
@@ -413,7 +416,7 @@ selcall(Fn *fn, Ins *i0, Ins *i1, RAlloc **rap)
 			continue;
 		r1 = newtmp("abi", Kl, fn);
 		if (i->op == Oargc) {
-			if (a->align == 4)
+			if (a->align >= 4)
 				off += off & 15;
 			emit(Oblit1, 0, R, INT(a->type->size), R);
 			emit(Oblit0, 0, R, i->arg[1], r1);
@@ -429,7 +432,7 @@ static int
 selpar(Fn *fn, Ins *i0, Ins *i1)
 {
 	AClass *ac, *a, aret;
-	Ins *i;
+	Ins *i, ains[3];
 	int ni, ns, s, al, fa;
 	Ref r, env;
 
@@ -456,9 +459,8 @@ selpar(Fn *fn, Ins *i0, Ins *i1)
 		}
 		a->ref[0] = newtmp("abi", Kl, fn);
 		emit(Ostorel, 0, R, a->ref[0], i->to);
-		/* specific to NAlign == 3 */
-		al = a->align >= 2 ? a->align - 2 : 0;
-		emit(Oalloc+al, Kl, i->to, getcon(a->size, fn), R);
+		for (al=stkalloc(ains, i->to, a->align, a->size, fn); al>0; al--)
+			emiti(ains[al-1]);
 	}
 
 	if (fn->retty >= 0 && aret.inmem) {
@@ -470,9 +472,7 @@ selpar(Fn *fn, Ins *i0, Ins *i1)
 	for (i=i0, a=ac, s=4; i<i1; i++, a++) {
 		switch (a->inmem) {
 		case 1:
-			if (a->align > 4)
-				err("sysv abi requires alignments of 16 or less");
-			if (a->align == 4)
+			if (a->align >= 4) /* see selcall */
 				s = (s+3) & -4;
 			fn->tmp[i->to.val].slot = -s;
 			s += a->size / 4;
@@ -652,17 +652,83 @@ selvastart(Fn *fn, int fa, Ref ap)
 	emit(Ostorew, Kw, R, getcon(gp, fn), ap);
 }
 
+/* A call that returns twice (setjmp and the like, as gcc's returns_twice): its caller's frame must stay, as a
+   longjmp to it returns into that frame. */
+static int
+returnstwice(Fn *fn, Ins *i)
+{
+	char *name;
+
+	if (rtype(i->arg[0]) != RCon || fn->con[i->arg[0].val].type != CAddr)
+		return 0;
+	name = str(fn->con[i->arg[0].val].sym.id);
+	return !strcmp(name, "setjmp") || !strcmp(name, "_setjmp") || !strcmp(name, "sigsetjmp")
+		|| !strcmp(name, "__sigsetjmp") || !strcmp(name, "savectx") || !strcmp(name, "vfork")
+		|| !strcmp(name, "getcontext");
+}
+
+/* A call of a helper that reads the frame of its caller: cproc's __builtin_return_address and __builtin_frame_address
+   call nfcxx_return_address (movq 8(%rbp), %rax) and nfcxx_frame_address (movq %rbp, %rax). A tail call would leave the
+   caller's frame before the helper runs, so such a call stays a call. */
+static int
+framereader(Fn *fn, Ins *i)
+{
+	char *name;
+
+	if (rtype(i->arg[0]) != RCon || fn->con[i->arg[0].val].type != CAddr)
+		return 0;
+	name = str(fn->con[i->arg[0].val].sym.id);
+	return !strcmp(name, "nfcxx_return_address") || !strcmp(name, "nfcxx_frame_address");
+}
+
+/* A call that ends its block, and whose result (if any) is the block's return value: the callee can return to our caller
+   itself. The emitter jumps to it after the epilogue (emit.c, tail calls). The call must be the block's last instruction
+   (selret has emitted the return copy into insb, and it is the only thing there), take no stack-passed or aggregate
+   argument and no static chain, and the function must have no landing pad, no varargs and no stack slot (nostack: the
+   frame the tail call removes must not hold anything the callee points into). Returns 1 and drops the return copy. */
+static int
+tailcallok(Blk *b, Ins *i0, Ins *i1, int nostack)
+{
+	Ins *c, *i;
+	AClass *ac, *a;
+	Ref env;
+	uint n;
+
+	if (!nostack || b->jmp.type != Jret0 || !req(i1->arg[1], R))
+		return 0;
+	n = &insb[NIns] - curi;
+	if (n == 0) {
+		if (!req(i1->to, R))
+			return 0;
+	} else {
+		c = curi;
+		if (n != 1 || c->op != Ocopy || c->cls != i1->cls || !req(c->arg[0], i1->to)
+		|| !(req(c->to, TMP(RAX)) || req(c->to, TMP(XMM0))))
+			return 0;
+	}
+	for (i=i0; i<i1; i++)
+		if (i->op == Oarge)
+			return 0;
+	env = R;
+	ac = alloc((i1-i0) * sizeof ac[0]);
+	argsclass(i0, i1, ac, Oarg, 0, &env);
+	for (a=ac; a<&ac[i1-i0]; a++)
+		if (a->inmem)
+			return 0;
+	return 1;
+}
+
 void
 amd64_sysv_abi(Fn *fn)
 {
 	Blk *b;
 	Ins *i, *i0;
 	RAlloc *ral;
+	int nostack;
 	int n0, n1, ioff, fa;
 
 	for (b=fn->start; b; b=b->link)
 		b->visit = 0;
-
 	/* lower parameters */
 	for (b=fn->start, i=b->ins; i<&b->ins[b->nins]; i++)
 		if (!ispar(i->op))
@@ -675,6 +741,14 @@ amd64_sysv_abi(Fn *fn)
 	icpy(b->ins+n0, b->ins+ioff, n1);
 	icpy(b->ins, curi, n0);
 	b->nins = n0+n1;
+
+	/* a static stack slot (alloc, also the copies of aggregate parameters that selpar made), a dynamic one, a varargs
+	   caller and a landing pad keep their calls */
+	nostack = !fn->dynalloc && !fn->vararg && !fn->eh_lp;
+	for (b=fn->start; b; b=b->link)
+		for (i=b->ins; i<&b->ins[b->nins]; i++)
+			if (isalloc(i->op) || i->op == Ocall && returnstwice(fn, i))
+				nostack = 0;
 
 	/* lower calls, returns, and vararg instructions */
 	ral = 0;
@@ -695,6 +769,11 @@ amd64_sysv_abi(Fn *fn)
 				for (i0=i; i0>b->ins; i0--)
 					if (!isarg((i0-1)->op))
 						break;
+				if (i == &b->ins[b->nins-1] && !framereader(fn, i) && tailcallok(b, i0, i, nostack)) {
+					curi = &insb[NIns];	/* the return copy goes: the callee's return value stays in place */
+					i->to = R;
+					b->tail = 1;
+				}
 				selcall(fn, i0, i, &ral);
 				i = i0;
 				break;

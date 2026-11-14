@@ -1,6 +1,9 @@
 #include "all.h"
 #include <limits.h>
 
+/* allocs of this many bytes or more are dynamic, not fixed frame slots (see the slot loop in amd64_isel) */
+#define BIGSLOT (1 << 20)
+
 /* For x86_64, do the following:
  *
  * - check that constants are used only in
@@ -121,15 +124,28 @@ fixarg(Ref *r, int k, Ins *i, Fn *fn)
 		emit(Oaddr, Kl, r1, SLOT(s), R);
 	}
 	else if (op != Ocall && hascon(r0, &c, fn)
-	&& c->type == CAddr && ((c->sym.type & SExt)
-	 || (T.apple && c->sym.type == SThr))) {
+	&& c->type == CAddr && (((c->sym.type & SExt) && !(absaddr && (isload(op) || isstore(op))))
+	 || (T.apple && c->sym.type == SThr)
+	 /* nfcxx: a local symbol plus an offset a rip-relative
+	  * displacement may not reach (the kernel's
+	  * __pa_symbol(idt_table), idt_table + 2^31): the
+	  * address, then the offset added from a register */
+	 || (!(c->sym.type & SThr)
+	  && (c->bits.i >= 1 << 30 || c->bits.i <= -(1 << 30))))) {
 		r1 = newtmp("isel", Kl, fn);
 		if (c->bits.i) {
 			r2 = newtmp("isel", Kl, fn);
 			cc = (Con){.type = CBits};
 			cc.bits.i = c->bits.i;
 			r3 = newcon(&cc, fn);
-			emit(Oadd, Kl, r1, r2, r3);
+			if (c->bits.i < INT32_MIN || c->bits.i > INT32_MAX) {
+				/* nfcxx: an offset an add cannot take as an
+				 * immediate (the kernel's _end + 2^31) */
+				Ref r4 = newtmp("isel", Kl, fn);
+				emit(Oadd, Kl, r1, r2, r4);
+				emit(Ocopy, Kl, r4, r3, R);
+			} else
+				emit(Oadd, Kl, r1, r2, r3);
 		} else
 			r2 = r1;
 		if (T.apple && (c->sym.type & SThr)) {
@@ -260,6 +276,7 @@ sel(Ins i, Num *tn, Fn *fn)
 	Ins *i0, *i1;
 
 	if (rtype(i.to) == RTmp)
+	if (i.op != Oxadd)   /* a locked add has an effect: its unused old value does not make it dead */
 	if (!isreg(i.to) && !isreg(i.arg[0]) && !isreg(i.arg[1]))
 	if (fn->tmp[i.to.val].nuse == 0) {
 		chuse(i.arg[0], -1, fn);
@@ -269,6 +286,16 @@ sel(Ins i, Num *tn, Fn *fn)
 	i0 = curi;
 	k = i.cls;
 	switch (i.op) {
+	case Oxadd:
+		/* lock xadd leaves the old value in its register: the result is a copy of the addend, which the locked add
+		 * updates in memory. The address is selected first, so it is computed before the copy and the locked add. */
+		r0 = i.arg[0];
+		seladdr(&r0, tn, fn);
+		emit(Olockadd, k, R, i.to, r0);
+		emit(Ocopy, k, i.to, i.arg[1], R);
+		i1 = curi;
+		fixarg(&i1->arg[0], k, i1, fn);
+		break;
 	case Odiv:
 	case Orem:
 	case Oudiv:
@@ -452,6 +479,97 @@ Emit:
 	case Oalloc16:
 		salloc(i.to, i.arg[0], fn);
 		break;
+	case Ovecload:
+		seladdr(&i.arg[0], tn, fn);
+		goto Emit;
+	case Ovecstore:
+		seladdr(&i.arg[1], tn, fn);
+		goto Emit;
+	case Ovecload256:
+		seladdr(&i.arg[0], tn, fn);
+		goto Emit;
+	case Ovecstore256:
+		seladdr(&i.arg[1], tn, fn);
+		goto Emit;
+	case Ovecbcastw256:
+	case Ovecbcasts256:
+	case Ovecaddw256:
+	case Ovecsubw256:
+	case Ovecmulw256:
+	case Ovecandw256:
+	case Ovecorw256:
+	case Ovecxorw256:
+	case Ovecadds256:
+	case Ovecsubs256:
+	case Ovecmuls256:
+	case Ovecdivs256:
+	case Ovecceqw256:
+	case Ovecgtw256:
+	case Ovecandn256:
+	case Ovecfeqs256:
+	case Ovecflts256:
+	case Ovecfles256:
+	case Ovecaddd256:
+	case Ovecsubd256:
+	case Ovecmuld256:
+	case Ovecdivd256:
+	case Ovecbcastd256:
+	case Ovecfeqd256:
+	case Ovecfltd256:
+	case Ovecfled256:
+	case Ovecfold256:
+		goto Emit;
+	case Ovecbcastw:
+	case Ovecbcasts:
+	case Ovecbcastd:
+	case Ovecaddw:
+	case Ovecsubw:
+	case Ovecandw:
+	case Ovecorw:
+	case Ovecxorw:
+	case Ovecadds:
+	case Ovecsubs:
+	case Ovecmuls:
+	case Ovecdivs:
+	case Ovecaddd:
+	case Ovecsubd:
+	case Ovecmuld:
+	case Ovecdivd:
+		goto Emit;
+	case Ovecext0w:
+	case Ovecext1w:
+	case Ovecext2w:
+	case Ovecext3w:
+	case Ovecext0s:
+	case Ovecext1s:
+	case Ovecext2s:
+	case Ovecext3s:
+	case Ovecext0d:
+	case Ovecext1d:
+	case Ovecshufe:
+	case Ovecshufo:
+	case Ovecunpckh32:
+	case Ovecunpcklpd:
+	case Ovecunpckhpd:
+	case Ovecceqw:
+	case Ovecgtw:
+	case Ovecandn:
+	case Ovecfeqs:
+	case Ovecflts:
+	case Ovecfles:
+	case Ovecfeqd:
+	case Ovecfltd:
+	case Ovecfled:
+	case Ovecload8:
+	case Ovecstore8:
+	case Ovecw2d:
+	case Ovecd2w:
+		goto Emit;
+	case Ovecmuludq:
+	case Ovecsrlq32:
+	case Ovecpack02:
+	case Ovecunpckl32:
+		goto Emit;
 	default:
 		if (isext(i.op))
 			goto case_Oext;
@@ -510,6 +628,39 @@ flagi(Ins *i0, Ins *i)
 	return 0;
 }
 
+/* nfcxx: the flags of a 64-bit arithmetic or logic instruction
+ * describe all 64 bits of its result, but jnz and select test a
+ * word.  The optimizer (load elimination followed by copy
+ * elimination) can make a word-class use refer to the long
+ * temporary directly, so "and" and friends of class l must not be
+ * used as the source of the flags; plain compare/test is used. */
+static int
+wflagi(Ins *fi, Ref r, int *k, int *c)
+{
+	if (!fi || !req(fi->to, r))
+		return 0;
+	if (iscmp(fi->op, k, c))
+		return 1;
+	return !KWIDE(fi->cls);
+}
+
+/* nfcxx: the compare that defines the condition of a select, when other instructions lie between the two (the arms of a
+ * diamond that ifopt turned into a select, and those may set the flags). selsel regenerates the compare right before the
+ * conditional moves, so the flags the moves read are its own. Only a condition with a single use is moved, and not one
+ * whose result is tested for equality (those take the copy path in selsel). */
+static Ins *
+defcmp(Ins *i0, Ins *i, Ref r)
+{
+	int k, c;
+
+	while (i>i0) {
+		i--;
+		if (req(i->to, r))
+			return iscmp(i->op, &k, &c) && c != NCmpI+Cfeq && c != NCmpI+Cfne ? i : 0;
+	}
+	return 0;
+}
+
 static Ins*
 selsel(Fn *fn, Blk *b, Ins *i, Num *tn)
 {
@@ -529,11 +680,18 @@ selsel(Fn *fn, Blk *b, Ins *i, Num *tn)
 	assert(rtype(r) == RTmp);
 	t = &fn->tmp[r.val];
 	fi = flagi(b->ins, isel0);
+	/* the instruction next to the select may set the flags without defining the condition (an arm's sub): then the
+	 * condition's own compare is the one to regenerate */
+	if ((!fi || !req(fi->to, r)) && t->nuse == 1) {
+		Ins *fc = defcmp(b->ins, isel0, r);
+		if (fc)
+			fi = fc;
+	}
 	cr[0] = cr[1] = R;
 	gencmp = gencpy = swap = 0;
 	k = Kw;
 	c = Cine;
-	if (!fi || !req(fi->to, r)) {
+	if (!wflagi(fi, r, &k, &c)) {
 		gencmp = 1;
 		cr[0] = r;
 		cr[1] = CON_Z;
@@ -592,6 +750,43 @@ selsel(Fn *fn, Blk *b, Ins *i, Num *tn)
 	return isel0;
 }
 
+/* The pair cmpxchg0 (address, expected) and cmpxchg1 (the head, desired): lock cmpxchg compares %rax with the memory and
+ * leaves the old memory value in %rax, so the expected value goes into %rax first and the result is copied from it. The
+ * address is selected first, as for xadd; the desired value must not be in %rax, which the fixed copies keep it out of. */
+static Ins *
+selcmpxchg(Fn *fn, Blk *b, Ins *i, Num *tn)
+{
+	Ref r0, r1;
+	Ins *ih, *i1;
+	int k;
+
+	assert(i->op == Ocmpxchg1);
+	assert(i > b->ins && (i-1)->op == Ocmpxchg0);
+	ih = i - 1;
+	k = i->cls;
+	r0 = ih->arg[0];
+	seladdr(&r0, tn, fn);
+	/* lock cmpxchg takes its desired value in a register, not as an immediate: a constant is copied into a temporary,
+	 * which is emitted last (so it comes first). */
+	r1 = i->arg[1];
+	if (rtype(r1) == RCon)
+		r1 = newtmp("isel", k, fn);
+	emit(Ocopy, k, i->to, TMP(RAX), R);
+	emit(Olockcmpxchg, k, R, r1, r0);
+	i1 = curi;
+	fixarg(&i1->arg[0], k, i1, fn);
+	emit(Ocopy, k, TMP(RAX), ih->arg[1], R);
+	i1 = curi;
+	fixarg(&i1->arg[0], k, i1, fn);
+	if (!req(r1, i->arg[1])) {
+		emit(Ocopy, k, r1, i->arg[1], R);
+		i1 = curi;
+		fixarg(&i1->arg[0], k, i1, fn);
+	}
+	*ih = (Ins){.op = Onop};
+	return ih;
+}
+
 static void
 seljmp(Blk *b, Fn *fn)
 {
@@ -600,6 +795,15 @@ seljmp(Blk *b, Fn *fn)
 	Ins *fi;
 	Tmp *t;
 
+	if (b->jmp.type == Jjtab) {
+		/* a jump table (emit.c's dispatch) overwrites the register of its index, so the index is copied into a temporary of
+		 * its own, which is dead after the jump: the other values live out of the block keep their registers */
+		r = newtmp("jtab", Kw, fn);
+		emit(Ocopy, Kw, r, b->jmp.arg, R);
+		chuse(r, 1, fn);
+		b->jmp.arg = r;
+		return;
+	}
 	if (b->jmp.type == Jret0
 	|| b->jmp.type == Jjmp
 	|| b->jmp.type == Jhlt)
@@ -616,7 +820,7 @@ seljmp(Blk *b, Fn *fn)
 		return;
 	}
 	fi = flagi(b->ins, &b->ins[b->nins]);
-	if (!fi || !req(fi->to, r)) {
+	if (!wflagi(fi, r, &k, &c)) {
 		selcmp((Ref[2]){r, CON_Z}, Kw, 0, fn);
 		b->jmp.type = Jjf + Cine;
 	}
@@ -899,8 +1103,12 @@ amd64_isel(Fn *fn)
 				if (rtype(i->arg[0]) != RCon)
 					break;
 				sz = fn->con[i->arg[0].val].bits.i;
-				if (sz < 0 || sz >= INT_MAX-15)
+				if (sz < 0)
 					err("invalid alloc size %"PRId64, sz);
+				/* a large fixed slot would need frame offsets beyond the 32-bit displacements: the
+				 * alloc stays an Oalloc and salloc makes it a dynamic allocation (rsp moves) */
+				if (sz >= BIGSLOT)
+					continue;
 				sz = (sz + n-1) & -n;
 				sz /= 4;
 				if (sz > INT_MAX - fn->slot)
@@ -930,6 +1138,8 @@ amd64_isel(Fn *fn)
 			assert(i->op != Osel0);
 			if (i->op == Osel1)
 				i = selsel(fn, b, i, num);
+			else if (i->op == Ocmpxchg1)
+				i = selcmpxchg(fn, b, i, num);
 			else
 				sel(*i, num, fn);
 		}

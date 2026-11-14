@@ -1,0 +1,95 @@
+# The induction variable used as a value: a[i] = i + b[i], a[i] = i, and a sum of i,
+# counting up and down.
+
+export
+function w $iplus(l %a, l %b, w %n) {
+@start
+@head
+	%i =w phi @start 0, @latch %i2
+	%c =w csltw %i, %n
+	jnz %c, @body, @done
+@body
+	%t =l extsw %i
+	%o =l mul %t, 4
+	%pb =l add %b, %o
+	%x =w loadsw %pb
+	%y =w add %i, %x
+	%pa =l add %a, %o
+	storew %y, %pa
+	jmp @latch
+@latch
+	%i2 =w add %i, 1
+	jmp @head
+@done
+	ret 0
+}
+
+export
+function w $istore(l %a, w %n) {
+@start
+@head
+	%i =w phi @start 0, @latch %i2
+	%c =w csltw %i, %n
+	jnz %c, @body, @done
+@body
+	%t =l extsw %i
+	%o =l mul %t, 4
+	%pa =l add %a, %o
+	storew %i, %pa
+	jmp @latch
+@latch
+	%i2 =w add %i, 1
+	jmp @head
+@done
+	ret 0
+}
+
+export
+function w $isumdn(l %b, w %n) {
+@start
+	%i0 =w sub %n, 1
+@head
+	%i =w phi @start %i0, @latch %i2
+	%s =w phi @start 0, @latch %s2
+	%c =w csgew %i, 0
+	jnz %c, @body, @done
+@body
+	%t =l extsw %i
+	%o =l mul %t, 4
+	%pb =l add %b, %o
+	%x =w loadsw %pb
+	%y =w add %x, %i
+	%s2 =w add %s, %y
+	jmp @latch
+@latch
+	%i2 =w sub %i, 1
+	jmp @head
+@done
+	ret %s
+}
+
+# >>> driver
+# #include <stdio.h>
+# void iplus(int *, int *, int);
+# void istore(int *, int);
+# int isumdn(int *, int);
+# int A[80], B[80];
+# int main() {
+# 	int n, i, bad = 0;
+# 	for (n = 0; n <= 30; n++) {
+# 		for (i = 0; i < 80; i++) { A[i] = -1; B[i] = i * 7 - 90; }
+# 		iplus(A, B, n);
+# 		for (i = 0; i < 80; i++) if (A[i] != (i < n ? B[i] + i : -1)) bad++;
+# 		for (i = 0; i < 80; i++) A[i] = -1;
+# 		istore(A, n);
+# 		for (i = 0; i < 80; i++) if (A[i] != (i < n ? i : -1)) bad++;
+# 		{
+# 			int s = 0, k;
+# 			for (k = n - 1; k >= 0; k--) s += B[k] + k;
+# 			if (isumdn(B, n) != s) bad++;
+# 		}
+# 	}
+# 	printf("bad=%d\n", bad);
+# 	return bad != 0;
+# }
+# <<<

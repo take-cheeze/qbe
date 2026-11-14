@@ -270,6 +270,14 @@ igroup(Blk *b, Ins *i, Ins **i0, Ins **i1)
 		*i0 = i - 1;
 		*i1 = i + 1;
 		return;
+	case Ocmpxchg1:
+		*i0 = i - 1;
+		*i1 = i + 1;
+		return;
+	case Ocmpxchg0:
+		*i0 = i;
+		*i1 = i + 2;
+		return;
 	case_Opar:
 		for (; i>ib && ispar((i-1)->op); i--)
 			;
@@ -313,7 +321,10 @@ igroup(Blk *b, Ins *i, Ins **i0, Ins **i1)
 int
 argcls(Ins *i, int n)
 {
-	return optab[i->op].argcls[n][i->cls];
+	int k;
+
+	k = optab[i->op].argcls[n][i->cls];
+	return k == Km ? Kptr : k;
 }
 
 void
@@ -538,6 +549,31 @@ isconbits(Fn *fn, Ref r, int64_t *v)
 	return 0;
 }
 
+/* Fills ins with the instructions, in block order, that set r
+ * to a stack slot of sz bytes aligned on 1<<al; returns their
+ * count. The alloc instructions align up to 16 (NAlign == 3),
+ * a larger alignment rounds up the address of a larger slot.
+ */
+int
+stkalloc(Ins *ins, Ref r, int al, uint64_t sz, Fn *fn)
+{
+	Ref r0, r1;
+	int64_t a;
+
+	if (al <= 4) {
+		al = al >= 2 ? al - 2 : 0;
+		ins[0] = (Ins){Oalloc+al, Kptr, r, {getcon(sz, fn)}};
+		return 1;
+	}
+	a = (int64_t)1 << al;
+	r0 = newtmp("isel", Kptr, fn);
+	r1 = newtmp("isel", Kptr, fn);
+	ins[0] = (Ins){Oalloc1, Kptr, r0, {getcon(sz + a - 16, fn)}};
+	ins[1] = (Ins){Oadd, Kptr, r1, {r0, getcon(a - 16, fn)}};
+	ins[2] = (Ins){Oand, Kptr, r, {r1, getcon(-a, fn)}};
+	return 3;
+}
+
 void
 salloc(Ref rt, Ref rs, Fn *fn)
 {
@@ -551,17 +587,24 @@ salloc(Ref rt, Ref rs, Fn *fn)
 	fn->dynalloc = 1;
 	if (rtype(rs) == RCon) {
 		sz = fn->con[rs.val].bits.i;
-		if (sz < 0 || sz >= INT_MAX-15)
+		if (sz < 0)
 			err("invalid alloc size %"PRId64, sz);
 		sz = (sz + 15)  & -16;
-		emit(Osalloc, Kl, rt, getcon(sz, fn), R);
+		if (sz < INT_MAX-15) {
+			emit(Osalloc, Kptr, rt, getcon(sz, fn), R);
+		} else {
+			/* too large for the immediate of a subq: the size goes through a register */
+			r0 = newtmp("isel", Kptr, fn);
+			emit(Osalloc, Kptr, rt, r0, R);
+			emit(Ocopy, Kptr, r0, getcon(sz, fn), R);
+		}
 	} else {
 		/* r0 = (r + 15) & -16 */
-		r0 = newtmp("isel", Kl, fn);
-		r1 = newtmp("isel", Kl, fn);
-		emit(Osalloc, Kl, rt, r0, R);
-		emit(Oand, Kl, r0, r1, getcon(-16, fn));
-		emit(Oadd, Kl, r1, rs, getcon(15, fn));
+		r0 = newtmp("isel", Kptr, fn);
+		r1 = newtmp("isel", Kptr, fn);
+		emit(Osalloc, Kptr, rt, r0, R);
+		emit(Oand, Kptr, r0, r1, getcon(-16, fn));
+		emit(Oadd, Kptr, r1, rs, getcon(15, fn));
 		if (fn->tmp[rs.val].slot != -1)
 			err("unlikely alloc argument %%%s for %%%s",
 				fn->tmp[rs.val].name, fn->tmp[rt.val].name);

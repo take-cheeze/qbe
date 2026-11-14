@@ -45,6 +45,11 @@ promote(Fn *fn)
 			}
 			goto Skip;
 		}
+		/* nfcxx: loads and no store (C copies a never-initialized struct, e.g. an empty
+		 * lambda's 1-byte storage): there is no value to promote to. Keep the slot;
+		 * the loads read garbage, as with gcc (scripts/qbe-uninit-load.patch). */
+		if (k == -1)
+			goto Skip;
 		/* get rid of the alloc and replace uses */
 		*i = (Ins){.op = Onop};
 		t->ndef--;
@@ -207,7 +212,7 @@ coalesce(Fn *fn)
 {
 	Range r, *br;
 	Slot *s, *s0, *sl;
-	Blk *b, **ps, *succ[3];
+	Blk *b;
 	Ins *i, **bl;
 	Use *u;
 	Tmp *t, *ts;
@@ -235,6 +240,13 @@ coalesce(Fn *fn)
 			s->t = n;
 			s->sz = t->alias.u.loc.sz;
 			s->m = t->alias.u.loc.m;
+			/* nfcxx: a slot that is never stored to must still be
+			 * readable. C allows passing an uninitialized struct by
+			 * value; with an empty mask the slot is killed and the
+			 * argument becomes a null address (see "crash" below).
+			 * Keep the slot; the callee sees garbage, as with gcc. */
+			if (!s->m)
+				s->m = s->sz >= NBit ? (bits)-1 : BIT(s->sz) - 1;
 			s->s = 0;
 			s->st = vnew(0, sizeof s->st[0], PHeap);
 			s->nst = 0;
@@ -251,14 +263,14 @@ coalesce(Fn *fn)
 	ip = INT_MAX - 1;
 	for (n=fn->nblk-1; n>=0; n--) {
 		b = fn->rpo[n];
-		succ[0] = b->s1;
-		succ[1] = b->s2;
-		succ[2] = 0;
 		br[n].b = ip--;
 		for (s=sl; s<&sl[nsl]; s++) {
 			s->l = 0;
-			for (ps=succ; *ps; ps++) {
-				m = (*ps)->id;
+			for (uint k=0; k<nsuccslot(b); k++) {
+				Blk *sb = *succslot(b, k);
+				if (!sb)
+					continue;
+				m = sb->id;
 				if (m > n && rin(s->r, br[m].a)) {
 					s->l = s->m;
 					radd(&s->r, ip);

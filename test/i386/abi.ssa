@@ -1,0 +1,230 @@
+# argument passing and returns, checked against gcc in both
+# directions (the driver calls QBE, QBE calls the driver)
+
+type :s1 = { b }
+type :s2 = { h }
+type :s3 = { b 3 }
+type :s4 = { w }
+type :s5 = { b 5 }
+type :s8 = { w, w }
+type :s12 = { w 3 }
+type :s20 = { w 5 }
+
+export function w $sum4(w %a, w %b, w %c, w %d) {
+@start
+	%x =w add %a, %b
+	%y =w add %c, %d
+	%z =w mul %y, 10
+	%r =w add %x, %z
+	ret %r
+}
+
+export function w $sub7(w %a, w %b, w %c, w %d, w %e, w %f, w %g) {
+@start
+	%r =w sub %a, %b
+	%r1 =w sub %r, %c
+	%r2 =w sub %r1, %d
+	%r3 =w sub %r2, %e
+	%r4 =w sub %r3, %f
+	%r5 =w sub %r4, %g
+	ret %r5
+}
+
+export function w $chars(sb %a, ub %b, sh %c, uh %d) {
+@start
+	%x =w add %a, %b
+	%y =w add %c, %d
+	%r =w add %x, %y
+	ret %r
+}
+
+export function sb $retsb(w %a) {
+@start
+	ret %a
+}
+
+export function ub $retub(w %a) {
+@start
+	ret %a
+}
+
+# struct arguments: return the sum of all their bytes
+function w $bsum(w %p, w %n) {
+@start
+	%s =w copy 0
+	%i =w copy 0
+@loop
+	%c =w cultw %i, %n
+	jnz %c, @body, @end
+@body
+	%q =w add %p, %i
+	%b =w loadub %q
+	%s =w add %s, %b
+	%i =w add %i, 1
+	jmp @loop
+@end
+	ret %s
+}
+
+export function w $take1(:s1 %a, w %x) {
+@start
+	%r =w call $bsum(w %a, w 1)
+	%r =w add %r, %x
+	ret %r
+}
+export function w $take3(w %x, :s3 %a) {
+@start
+	%r =w call $bsum(w %a, w 3)
+	%r =w add %r, %x
+	ret %r
+}
+export function w $take5(:s5 %a, w %x) {
+@start
+	%r =w call $bsum(w %a, w 5)
+	%r =w add %r, %x
+	ret %r
+}
+export function w $take8(w %x, :s8 %a, w %y) {
+@start
+	%r =w call $bsum(w %a, w 8)
+	%r =w add %r, %x
+	%y =w mul %y, 1000
+	%r =w add %r, %y
+	ret %r
+}
+export function w $take12(:s12 %a, w %x) {
+@start
+	%r =w call $bsum(w %a, w 12)
+	%r =w add %r, %x
+	ret %r
+}
+export function w $take12b(w %x, w %y, :s12 %a, w %z) {
+@start
+	%r =w call $bsum(w %a, w 12)
+	%r =w add %r, %x
+	%y =w mul %y, 100
+	%r =w add %r, %y
+	%z =w mul %z, 10000
+	%r =w add %r, %z
+	ret %r
+}
+export function w $take20(:s20 %a, :s2 %b, :s4 %c) {
+@start
+	%r =w call $bsum(w %a, w 20)
+	%r1 =w call $bsum(w %b, w 2)
+	%r2 =w call $bsum(w %c, w 4)
+	%r =w add %r, %r1
+	%r =w add %r, %r2
+	ret %r
+}
+
+# struct returns: bytes v, v+1, ...
+function $fill(w %p, w %n, w %v) {
+@start
+	%i =w copy 0
+@loop
+	%c =w cultw %i, %n
+	jnz %c, @body, @end
+@body
+	%q =w add %p, %i
+	%b =w add %v, %i
+	storeb %b, %q
+	%i =w add %i, 1
+	jmp @loop
+@end
+	ret
+}
+export function :s3 $ret3(w %v) {
+@start
+	%p =w alloc4 4
+	call $fill(w %p, w 3, w %v)
+	ret %p
+}
+export function :s8 $ret8(w %v) {
+@start
+	%p =w alloc4 8
+	call $fill(w %p, w 8, w %v)
+	ret %p
+}
+export function :s20 $ret20(w %v, w %w) {
+@start
+	%p =w alloc4 20
+	%v =w add %v, %w
+	call $fill(w %p, w 20, w %v)
+	ret %p
+}
+
+# calls into the driver
+export function w $callc() {
+@start
+	%a =w call $c_sum4(w 1, w 2, w 3, w 4)
+	%b =w call $c_sub7(w 100, w 1, w 2, w 3, w 4, w 5, w 6)
+	%s =:s8 call $c_ret8(w 10)
+	%c =w call $bsum(w %s, w 8)
+	%t =:s20 call $c_ret20(w 1, w 2)
+	%d =w call $bsum(w %t, w 20)
+	%e =w call $c_take8(w 7, :s8 %s, w 3)
+	%f =w call $c_take12b(w 1, w 2, :s12 %t, w 3)
+	%u =:s3 call $c_ret3(w 50)
+	%g =w call $c_take3(w 9, :s3 %u)
+	%h =w call $c_chars(w -1, w 255, w -2, w 65535)
+	%r =w call $c_check6(w %a, w %b, w %c, w %d, w %e, w %f)
+	%r =w add %r, %g
+	%r =w add %r, %h
+	ret %r
+}
+
+# >>> driver
+# #include "rt.h"
+# struct s1 { char c; }; struct s2 { short h; }; struct s3 { char c[3]; };
+# struct s4 { int w; }; struct s5 { char c[5]; }; struct s8 { int a, b; };
+# struct s12 { int w[3]; }; struct s20 { int w[5]; };
+# int sum4(int, int, int, int); int sub7(int, int, int, int, int, int, int);
+# int chars(signed char, unsigned char, short, unsigned short);
+# signed char retsb(int); unsigned char retub(int);
+# int take1(struct s1, int); int take3(int, struct s3); int take5(struct s5, int);
+# int take8(int, struct s8, int); int take12(struct s12, int);
+# int take12b(int, int, struct s12, int); int take20(struct s20, struct s2, struct s4);
+# struct s3 ret3(int); struct s8 ret8(int); struct s20 ret20(int, int);
+# int callc(void);
+# static int bs(void *p, int n) { unsigned char *c = p; int s = 0; while (n--) s += *c++; return s; }
+# static void fl(void *p, int n, int v) { unsigned char *c = p; int i; for (i = 0; i < n; i++) c[i] = v + i; }
+# int c_sum4(int a, int b, int c, int d) { return a + b + 10 * (c + d); }
+# int c_sub7(int a, int b, int c, int d, int e, int f, int g) { return a-b-c-d-e-f-g; }
+# struct s8 c_ret8(int v) { struct s8 s; fl(&s, 8, v); return s; }
+# struct s20 c_ret20(int v, int w) { struct s20 s; fl(&s, 20, v + w); return s; }
+# struct s3 c_ret3(int v) { struct s3 s; fl(&s, 3, v); return s; }
+# int c_take8(int x, struct s8 a, int y) { return bs(&a, 8) + x + 1000 * y; }
+# int c_take12b(int x, int y, struct s12 a, int z) { return bs(&a, 12) + x + 100 * y + 10000 * z; }
+# int c_take3(int x, struct s3 a) { return bs(&a, 3) + x; }
+# int c_chars(signed char a, unsigned char b, short c, unsigned short d) { return a + b + c + d; }
+# int c_check6(int a, int b, int c, int d, int e, int f) {
+# 	EQ("c_sum4", a, 73); EQ("c_sub7", b, 79); EQ("c_ret8", c, 8*10+28);
+# 	EQ("c_ret20", d, 20*3+190); EQ("c_take8", e, 108+7+3000);
+# 	EQ("c_take12b", f, (12*3+66)+1+200+30000);
+# 	return 0;
+# }
+# int main(void) {
+# 	struct s1 a1 = {7}; struct s2 a2 = {0x0102}; struct s3 a3 = {{1, 2, 3}}; struct s4 a4 = {0x01010101};
+# 	struct s5 a5 = {{1, 2, 3, 4, 5}}; struct s8 a8; struct s12 a12; struct s20 a20;
+# 	struct s3 r3; struct s8 r8; struct s20 r20;
+# 	fl(&a8, 8, 1); fl(&a12, 12, 1); fl(&a20, 20, 1);
+# 	EQ("sum4", sum4(1, 2, 3, 4), 73);
+# 	EQ("sub7", sub7(100, 1, 2, 3, 4, 5, 6), 79);
+# 	EQ("chars", chars(-1, 255, -2, 65535), -1 + 255 - 2 + 65535);
+# 	EQ("retsb", retsb(0x1ff), -1);
+# 	EQ("retub", retub(0x1ff), 255);
+# 	EQ("take1", take1(a1, 3), 10);
+# 	EQ("take3", take3(4, a3), 10);
+# 	EQ("take5", take5(a5, 5), 20);
+# 	EQ("take8", take8(5, a8, 2), 36 + 5 + 2000);
+# 	EQ("take12", take12(a12, 6), 78 + 6);
+# 	EQ("take12b", take12b(1, 2, a12, 3), 78 + 1 + 200 + 30000);
+# 	EQ("take20", take20(a20, a2, a4), 210 + 3 + 4);
+# 	r3 = ret3(10); EQ("ret3", bs(&r3, 3), 33);
+# 	r8 = ret8(10); EQ("ret8", bs(&r8, 8), 108);
+# 	r20 = ret20(1, 2); EQ("ret20", bs(&r20, 20), 250);
+# 	EQ("callc", callc(), 0 + (3*50+3+9) + (-1 + 255 - 2 + 65535));
+# 	return 0;
+# }
+# <<<

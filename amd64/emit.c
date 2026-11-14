@@ -9,7 +9,20 @@ struct E {
 	int fp;
 	uint64_t fsz;
 	int nclob;
+	int tail;	/* the call is emitted as a jump (a tail call, sysv.c tailcallok) */
 };
+
+/* A tail call's target stays in its register through the epilogue, which restores the callee-saved registers and the
+   frame pointer: a target in one of them, or a spilled one (in the frame), is a plain call. */
+static int
+tailtarget(Ins *i)
+{
+	if (rtype(i->arg[0]) == RCon)
+		return 1;
+	return isreg(i->arg[0]) && i->arg[0].val != RBP && i->arg[0].val != RSP
+		&& i->arg[0].val != RBX && i->arg[0].val != R12 && i->arg[0].val != R13
+		&& i->arg[0].val != R14 && i->arg[0].val != R15;
+}
 
 #define CMP(X) \
 	X(Ciule,      "be", "a") \
@@ -88,6 +101,68 @@ static struct {
 	{ Ostoreb,  Ka, "movb %B0, %M1" },
 	{ Ostores,  Ka, "movss %S0, %M1" },
 	{ Ostored,  Ka, "movsd %D0, %M1" },
+	{ Ovecload,  Ka, "movups %M0, %=" },
+	{ Ovecstore, Ka, "movups %0, %M1" },
+	{ Ovecaddw,  Kd, "+paddd %1, %=" },
+	{ Ovecsubw,  Kd, "-psubd %1, %=" },
+	{ Ovecandw,  Kd, "+pand %1, %=" },
+	{ Ovecorw,   Kd, "+por %1, %=" },
+	{ Ovecxorw,  Kd, "+pxor %1, %=" },
+	{ Ovecadds,  Kd, "+addps %1, %=" },
+	{ Ovecsubs,  Kd, "-subps %1, %=" },
+	{ Ovecmuls,  Kd, "+mulps %1, %=" },
+	{ Ovecdivs,  Kd, "-divps %1, %=" },
+	{ Ovecaddd,  Kd, "+addpd %1, %=" },
+	{ Ovecsubd,  Kd, "-subpd %1, %=" },
+	{ Ovecmuld,  Kd, "+mulpd %1, %=" },
+	{ Ovecdivd,  Kd, "-divpd %1, %=" },
+	{ Ovecmuludq, Kd, "+pmuludq %1, %=" },
+	{ Ovecsrlq32, Kd, "-psrlq $32, %=" },
+	{ Ovecpack02, Kd, "pshufd $136, %0, %=" },
+	{ Ovecunpckl32, Kd, "-punpckldq %1, %=" },
+	{ Ovecunpckh32, Kd, "-punpckhdq %1, %=" },
+	{ Ovecshufe, Kd, "-shufps $136, %1, %=" },
+	{ Ovecshufo, Kd, "-shufps $221, %1, %=" },
+	{ Ovecunpcklpd, Kd, "-unpcklpd %1, %=" },
+	{ Ovecunpckhpd, Kd, "-unpckhpd %1, %=" },
+	{ Ovecceqw, Kd, "+pcmpeqd %1, %=" },
+	{ Ovecgtw, Kd, "-pcmpgtd %1, %=" },
+	{ Ovecandn, Kd, "-pandn %1, %=" },
+	{ Ovecfeqs, Kd, "-cmpps $0, %1, %=" },
+	{ Ovecflts, Kd, "-cmpps $1, %1, %=" },
+	{ Ovecfles, Kd, "-cmpps $2, %1, %=" },
+	{ Ovecfeqd, Kd, "-cmppd $0, %1, %=" },
+	{ Ovecfltd, Kd, "-cmppd $1, %1, %=" },
+	{ Ovecfled, Kd, "-cmppd $2, %1, %=" },
+	{ Ovecload8, Ka, "movq %M0, %=" },
+	{ Ovecload256, Ka, "vmovups %M0, %=" },
+	{ Ovecstore256, Ka, "vmovups %0, %M1" },
+	{ Ovecaddw256, Kd, "vpaddd %1, %0, %=" },
+	{ Ovecsubw256, Kd, "vpsubd %1, %0, %=" },
+	{ Ovecmulw256, Kd, "vpmulld %1, %0, %=" },
+	{ Ovecandw256, Kd, "vpand %1, %0, %=" },
+	{ Ovecorw256, Kd, "vpor %1, %0, %=" },
+	{ Ovecxorw256, Kd, "vpxor %1, %0, %=" },
+	{ Ovecadds256, Kd, "vaddps %1, %0, %=" },
+	{ Ovecsubs256, Kd, "vsubps %1, %0, %=" },
+	{ Ovecmuls256, Kd, "vmulps %1, %0, %=" },
+	{ Ovecdivs256, Kd, "vdivps %1, %0, %=" },
+	{ Ovecceqw256, Kd, "vpcmpeqd %1, %0, %=" },
+	{ Ovecgtw256, Kd, "vpcmpgtd %1, %0, %=" },
+	{ Ovecandn256, Kd, "vpandn %1, %0, %=" },
+	{ Ovecfeqs256, Kd, "vcmpps $0, %1, %0, %=" },
+	{ Ovecflts256, Kd, "vcmpps $1, %1, %0, %=" },
+	{ Ovecfles256, Kd, "vcmpps $2, %1, %0, %=" },
+	{ Ovecaddd256, Kd, "vaddpd %1, %0, %=" },
+	{ Ovecsubd256, Kd, "vsubpd %1, %0, %=" },
+	{ Ovecmuld256, Kd, "vmulpd %1, %0, %=" },
+	{ Ovecdivd256, Kd, "vdivpd %1, %0, %=" },
+	{ Ovecfeqd256, Kd, "vcmppd $0, %1, %0, %=" },
+	{ Ovecfltd256, Kd, "vcmppd $1, %1, %0, %=" },
+	{ Ovecfled256, Kd, "vcmppd $2, %1, %0, %=" },
+	{ Ovecstore8, Ka, "movq %0, %M1" },
+	{ Ovecw2d, Kd, "cvtdq2pd %0, %=" },
+	{ Ovecd2w, Kd, "cvttpd2dq %0, %=" },
 	{ Oload,    Ka, "mov%k %M0, %=" },
 	{ Oloadsw,  Kl, "movslq %M0, %L=" },
 	{ Oloadsw,  Kw, "movl %M0, %W=" },
@@ -114,6 +189,8 @@ static struct {
 
 	{ Oaddr,    Ki, "lea%k %M0, %=" },
 	{ Oswap,    Ki, "xchg%k %0, %1" },
+	{ Olockadd, Ki, "lock xadd%k %0, %M1" },
+	{ Olockcmpxchg, Ki, "lock cmpxchg%k %0, %M1" },
 	{ Osign,    Kl, "cqto" },
 	{ Osign,    Kw, "cltd" },
 	{ Oxdiv,    Ki, "div%k %0" },
@@ -213,6 +290,9 @@ emitcon(Con *con, E *e)
 	}
 }
 
+/* the instruction being emitted works on 256-bit vectors (its xmm registers are ymm ones) */
+static int wideins;
+
 static char *
 regtoa(int reg, int sz)
 {
@@ -220,11 +300,25 @@ regtoa(int reg, int sz)
 
 	assert(reg <= XMM15);
 	if (reg >= XMM0) {
-		sprintf(buf, "xmm%d", reg-XMM0);
+		sprintf(buf, wideins ? "ymm%d" : "xmm%d", reg-XMM0);
 		return buf;
 	} else
 		return rname[reg][sz];
 }
+
+/* -A (absaddr): the address of a symbol as a sign-extended 32-bit immediate, movq $sym[+off], %reg (gcc's kernel model;
+ * QBE's rip-relative lea is the physical address while the kernel runs identity-mapped) */
+static void
+emitabsaddr(Ins *i, Con *con, E *e)
+{
+	char *sym = str(con->sym.id);
+
+	fprintf(e->f, "\tmovq $%s%s", sym[0] == '"' ? "" : T.assym, sym);
+	if (con->bits.i)
+		fprintf(e->f, "%+lld", (long long)con->bits.i);
+	fprintf(e->f, ", %%%s\n", regtoa(i->to.val, SLong));
+}
+
 
 static Ref
 getarg(char c, Ins *i)
@@ -241,18 +335,62 @@ getarg(char c, Ins *i)
 	}
 }
 
+static void emitf(char *, Ins *, E *);
+
+/* A jump table (nfcxx, jtab %index, @default, @t0, ...): the index is a register (the isel copy of the index), which the
+ * dispatch overwrites: it is zero-extended, checked against the count (the default when not below it), then scaled and
+ * added to the table's address, which is held in memory (a relocated quad, so the code needs no relocation and no scratch
+ * register). The table is in .data.rel.ro after the function (emitjtabs). */
+static void
+emitjtab(Blk *b, uint id0, E *e)
+{
+	FILE *f = e->f;
+	int r;
+
+	if (rtype(b->jmp.arg) != RTmp || !isreg(b->jmp.arg))
+		die("jtab: the index is not in a register");
+	r = b->jmp.arg.val;
+	fprintf(f, "\tmovl %%%s, %%%s\n", regtoa(r, SWord), regtoa(r, SWord));
+	fprintf(f, "\tcmpl $%u, %%%s\n", b->ntab, regtoa(r, SWord));
+	fprintf(f, "\tjae %sbb%d\n", T.asloc, id0+b->s1->id);
+	fprintf(f, "\tshlq $3, %%%s\n", regtoa(r, SLong));
+	fprintf(f, "\taddq %sjtp%d(%%rip), %%%s\n", T.asloc, id0+b->id, regtoa(r, SLong));
+	fprintf(f, "\tjmp *(%%%s)\n", regtoa(r, SLong));
+}
+
+/* the tables, after the function (their section is restored to .text) */
+static void
+emitjtabs(Fn *fn, uint id0, E *e)
+{
+	Blk *b;
+	uint n;
+
+	for (b=fn->start; b; b=b->link)
+		if (b->jmp.type == Jjtab) {
+			fprintf(e->f, "\t.section .data.rel.ro,\"aw\"\n\t.p2align 3\n");
+			fprintf(e->f, "%sjtp%d:\n\t.quad %sjt%d\n", T.asloc, id0+b->id, T.asloc, id0+b->id);
+			fprintf(e->f, "%sjt%d:\n", T.asloc, id0+b->id);
+			for (n=0; n<b->ntab; n++)
+				fprintf(e->f, "\t.quad %sbb%d\n", T.asloc, id0+b->tab[n]->id);
+			fputs("\t.text\n", e->f);
+		}
+}
+
 static void emitins(Ins, E *);
 
 static void
 emitcopy(Ref r1, Ref r2, int k, E *e)
 {
 	Ins icp;
+	int w;
 
 	icp.op = Ocopy;
 	icp.arg[0] = r2;
 	icp.to = r1;
 	icp.cls = k;
+	w = wideins;	/* the copy sets wideins for itself: the instruction being emitted keeps its own */
 	emitins(icp, e);
+	wideins = w;
 }
 
 static void
@@ -412,6 +550,12 @@ emitins(Ins i, E *e)
 	Con *con;
 	char *sym;
 
+	/* the 256-bit vector ops, and the copies of vectors in a function that has them (its slots are 32 bytes) */
+	wideins = (i.op >= Ovecbcasts256 && i.op <= Ovecfled256)
+		|| (i.op == Ocopy && i.cls == Kd && e->fn->widevec
+		    && (isreg(i.to) || rtype(i.to) == RSlot)
+		    && (isreg(i.arg[0]) || rtype(i.arg[0]) == RSlot));
+
 	switch (i.op) {
 	default:
 		if (isxsel(i.op))
@@ -432,7 +576,102 @@ emitins(Ins i, E *e)
 			|| (omap[o].cls == Ka))
 				break;
 		}
+		/* a two-address form whose result is the second source: copy that source aside first (xmm15) */
+		if (omap[o].fmt[0] == '-' && KBASE(i.cls) == 1 && req(i.to, i.arg[1]) && !req(i.arg[0], i.to)) {
+			emitf("movaps %1, %%xmm15", &i, e);
+			i.arg[1] = TMP(XMM0+15);
+		}
 		emitf(omap[o].fmt, &i, e);
+		break;
+	case Ovecext0s:
+		emitf("movss %0, %=", &i, e);
+		break;
+	case Ovecext1s:
+		emitf("pshufd $1, %0, %%xmm15", &i, e);
+		emitf("movss %%xmm15, %=", &i, e);
+		break;
+	case Ovecext2s:
+		emitf("pshufd $2, %0, %%xmm15", &i, e);
+		emitf("movss %%xmm15, %=", &i, e);
+		break;
+	case Ovecext3s:
+		emitf("pshufd $3, %0, %%xmm15", &i, e);
+		emitf("movss %%xmm15, %=", &i, e);
+		break;
+	case Ovecext0d:
+		emitf("movsd %0, %=", &i, e);
+		break;
+	case Ovecext1d:
+		emitf("pshufd $14, %0, %%xmm15", &i, e);
+		emitf("movsd %%xmm15, %=", &i, e);
+		break;
+	case Ovecext0w:
+		emitf("movd %0, %W=", &i, e);
+		break;
+	case Ovecext1w:
+		emitf("pshufd $1, %0, %%xmm15", &i, e);
+		emitf("movd %%xmm15, %W=", &i, e);
+		break;
+	case Ovecext2w:
+		emitf("pshufd $2, %0, %%xmm15", &i, e);
+		emitf("movd %%xmm15, %W=", &i, e);
+		break;
+	case Ovecext3w:
+		emitf("pshufd $3, %0, %%xmm15", &i, e);
+		emitf("movd %%xmm15, %W=", &i, e);
+		break;
+	case Ovecbcastw:
+		/* the scalar into lane 0, then lane 0 into all four (pshufd) */
+		emitf("movd %W0, %=", &i, e);
+		emitf("pshufd $0, %=, %=", &i, e);
+		break;
+	case Ovecbcasts:
+		emitf("movss %S0, %=", &i, e);
+		emitf("pshufd $0, %=, %=", &i, e);
+		break;
+	case Ovecbcastd:
+		/* lanes 0 and 1 (the low quadword) into both quadwords */
+		emitf("movsd %D0, %=", &i, e);
+		emitf("pshufd $68, %=, %=", &i, e);
+		break;
+	case Ovecfold256: {
+		/* the high 128 bits of the ymm source into the xmm destination: names by hand (the source is wide) */
+		char fmt[64], src[8], dst[8];
+
+		wideins = 1;
+		strcpy(src, regtoa(i.arg[0].val, SLong));
+		wideins = 0;
+		strcpy(dst, regtoa(i.to.val, SLong));
+		sprintf(fmt, "vextracti128 $1, %%%%%s, %%%%%s", src, dst);
+		emitf(fmt, &i, e);
+		break;
+	}
+	case Ovecbcastd256: {
+		/* the double to all four lanes (vbroadcastsd takes an xmm or a slot) */
+		char fmt[64], d[8];
+
+		wideins = 1;
+		strcpy(d, regtoa(i.to.val, SLong));
+		wideins = 0;
+		sprintf(fmt, "vbroadcastsd %%D0, %%%%%s", d);
+		emitf(fmt, &i, e);
+		break;
+	}
+	case Ovecbcasts256: {
+		/* the float to all eight lanes: the source is an xmm (or a slot), the destination a ymm */
+		char fmt[64], d[8];
+
+		wideins = 1;
+		strcpy(d, regtoa(i.to.val, SLong));
+		wideins = 0;
+		sprintf(fmt, "vbroadcastss %%S0, %%%%%s", d);
+		emitf(fmt, &i, e);
+		break;
+	}
+	case Ovecbcastw256:
+		/* the scalar into the low lane of xmm15, then broadcast it to all eight lanes of the ymm */
+		emitf("vmovd %W0, %%xmm15", &i, e);
+		emitf("vpbroadcastd %%xmm15, %=", &i, e);
 		break;
 	case Onop:
 		/* just do nothing for nops, they are inserted
@@ -497,6 +736,30 @@ emitins(Ins i, E *e)
 		if (req(i.to, i.arg[0]))
 			break;
 		t0 = rtype(i.arg[0]);
+		if (i.cls == Kd
+		&& (t0 == RSlot || isreg(i.arg[0]))
+		&& (rtype(i.to) == RSlot || isreg(i.to))) {
+			/* a double in a slot (spill.c gives it 16 bytes) or a vector: the whole register moves,
+			 * movsd would keep only the low lane */
+			/* a 256-bit copy (wideins) moves 32 bytes: the slots of such a function are 32 bytes too */
+			char *mu = wideins ? "vmovups" : "movups";
+			char *ma = wideins ? "vmovaps" : "movaps";
+			char fmt[32];
+			if (t0 == RSlot && rtype(i.to) == RSlot) {
+				i.arg[1] = TMP(XMM0+15);
+				sprintf(fmt, "%s %%0, %%1", mu);
+				emitf(fmt, &i, e);
+				sprintf(fmt, "%s %%1, %%=", mu);
+				emitf(fmt, &i, e);
+			} else if (isreg(i.to) && isreg(i.arg[0])) {
+				sprintf(fmt, "%s %%0, %%=", ma);
+				emitf(fmt, &i, e);
+			} else {
+				sprintf(fmt, "%s %%0, %%=", mu);
+				emitf(fmt, &i, e);
+			}
+			break;
+		}
 		if (i.cls == Kl
 		&& t0 == RCon
 		&& e->fn->con[i.arg[0].val].type == CBits) {
@@ -516,7 +779,23 @@ emitins(Ins i, E *e)
 		if (isreg(i.to)
 		&& t0 == RCon
 		&& e->fn->con[i.arg[0].val].type == CAddr) {
+			if (absaddr && !(e->fn->con[i.arg[0].val].sym.type & SThr)) {
+				emitabsaddr(&i, &e->fn->con[i.arg[0].val], e);   /* -A: a symbol's address, not rip-relative */
+				break;
+			}
 			emitf("lea%k %M0, %=", &i, e);
+			break;
+		}
+		if (rtype(i.to) == RSlot
+		&& (t0 == RSlot || t0 == RMem)
+		&& nofp && KBASE(i.cls) == 0) {
+			/* -n: no %xmm15; %rax, saved below the frame (the
+			 * slots are %rbp-relative under -n, emitfn) */
+			fputs("\tpushq %rax\n", e->f);
+			i.arg[1] = TMP(RAX);
+			emitf("mov%k %0, %1", &i, e);
+			emitf("mov%k %1, %=", &i, e);
+			fputs("\tpopq %rax\n", e->f);
 			break;
 		}
 		if (rtype(i.to) == RSlot
@@ -537,6 +816,10 @@ emitins(Ins i, E *e)
 		con = &e->fn->con[i.arg[0].val];
 		assert(isreg(i.to) && con->type == CAddr);
 		sym = str(con->sym.id);
+		if (absaddr && !(con->sym.type & SThr)) {
+			emitabsaddr(&i, con, e);   /* -A: a symbol's address, not rip-relative */
+			break;
+		}
 		if (T.apple && (con->sym.type & SThr)) {
 			fprintf(e->f,
 				"\tmovq %s%s@tlvp(%%rip), %%%s\n",
@@ -571,6 +854,14 @@ emitins(Ins i, E *e)
 				regtoa(i.to.val, SLong));
 			break;
 		case SExt:
+			if (absaddr) {
+				/* -A: the address as gcc's kernel model writes it: a sign-extended 32-bit immediate */
+				fprintf(e->f, "\tmovq $%s%s", sym[0] == '"' ? "" : T.assym, sym);
+				if (con->bits.i)
+					fprintf(e->f, "%+lld", (long long)con->bits.i);
+				fprintf(e->f, ", %%%s\n", regtoa(i.to.val, SLong));
+				break;
+			}
 			/* load address from the GOT */
 			assert(!con->bits.i);
 			fprintf(e->f,
@@ -588,7 +879,7 @@ emitins(Ins i, E *e)
 		switch (rtype(i.arg[0])) {
 		case RCon:
 			con = &e->fn->con[i.arg[0].val];
-			fprintf(e->f, "\tcallq ");
+			fprintf(e->f, e->tail ? "\tjmp " : "\tcallq ");
 			emitcon(con, e);
 			if (con->type == CAddr
 			&& (con->sym.type & SExt)
@@ -597,7 +888,10 @@ emitins(Ins i, E *e)
 			fprintf(e->f, "\n");
 			break;
 		case RTmp:
-			emitf("callq *%L0", &i, e);
+			if (e->tail)
+				emitf("jmp *%L0", &i, e);
+			else
+				emitf("callq *%L0", &i, e);
 			break;
 		default:
 			die("invalid call argument");
@@ -669,17 +963,25 @@ amd64_sysv_emitfn(Fn *fn, FILE *f)
 	};
 	static int id0;
 	Blk *b, *s;
-	Ins *i, itmp;
-	int *r, c, o, n, lbl;
+	Ins *i, *last, itmp;
+	int *r, c, o, n, lbl, unw;
 	uint p;
 	E *e;
 
 	e = &(E){.f = f, .fn = fn};
+	/* DWARF CFI for functions that make calls: a C++ throw unwinds through them. Leaf functions make no
+	   calls, so no unwinder stops inside them. Apple targets use their own unwind format, not emitted here. */
+	unw = !T.apple && !fn->leaf && !nounwind;   /* nfcxx -U: no unwind tables */
 	emitfnlnk(fn->name, &fn->lnk, f);
+	if (unw)
+		fputs("\t.cfi_startproc\n", f);
+	ehfnbegin(fn, f);
 	fputs("\tendbr64\n", f);
-	if (!fn->leaf || fn->vararg || fn->dynalloc) {
+	if (!fn->leaf || fn->vararg || fn->dynalloc || nofp) {
 		e->fp = RBP;
 		fputs("\tpushq %rbp\n\tmovq %rsp, %rbp\n", f);
+		if (unw)
+			fputs("\t.cfi_def_cfa_offset 16\n\t.cfi_offset %rbp, -16\n\t.cfi_def_cfa_register %rbp\n", f);
 	} else
 		e->fp = RSP;
 	sysv_framesz(e);
@@ -689,7 +991,9 @@ amd64_sysv_emitfn(Fn *fn, FILE *f)
 		o = -176;
 		for (r=amd64_sysv_rsave; r<&amd64_sysv_rsave[6]; r++, o+=8)
 			fprintf(f, "\tmovq %%%s, %d(%%rbp)\n", rname[*r][0], o);
-		for (n=0; n<8; ++n, o+=16)
+		/* -n: no caller passes floating-point arguments
+		 * (the kernel's -mno-sse), so none are saved */
+		for (n=0; n<8 && !nofp; ++n, o+=16)
 			fprintf(f, "\tmovaps %%xmm%d, %d(%%rbp)\n", n, o);
 	}
 	for (r=amd64_sysv_rclob; r<&amd64_sysv_rclob[NCLR_SYSV]; r++)
@@ -697,9 +1001,14 @@ amd64_sysv_emitfn(Fn *fn, FILE *f)
 			itmp.arg[0] = TMP(*r);
 			emitf("pushq %L0", &itmp, e);
 			e->nclob++;
+			/* The k-th push is below the frame, at CFA - (16 + fsz + 8k) with the rbp frame. */
+			if (unw)
+				fprintf(f, "\t.cfi_offset %%%s, %d\n", rname[*r][0],
+					-(int)(16 + e->fsz + 8 * e->nclob));
 		}
 
 	for (lbl=0, b=fn->start; b; b=b->link) {
+		ehlpbegin(fn, b, f);
 		if (lbl || b->npred > 1) {
 			for (p=0; p<b->npred; p++)
 				if (b->pred[p]->id >= b->id)
@@ -708,14 +1017,27 @@ amd64_sysv_emitfn(Fn *fn, FILE *f)
 				fprintf(f, ".p2align 4\n");
 			fprintf(f, "%sbb%d:\n", T.asloc, id0+b->id);
 		}
-		for (i=b->ins; i!=&b->ins[b->nins]; i++)
+		/* a tail call (sysv.c tailcallok): the block's last instruction is its call, which the epilogue precedes */
+		last = b->tail && b->jmp.type == Jret0 && b->nins && b->ins[b->nins-1].op == Ocall
+			&& tailtarget(&b->ins[b->nins-1]) ? &b->ins[b->nins-1] : 0;
+		for (i=b->ins; i!=&b->ins[b->nins]; i++) {
+			if (i == last)
+				break;
+			if (i->op == Ocall)
+				ehcsbegin(fn, b, f);
 			emitins(*i, e);
+			if (i->op == Ocall)
+				ehcsend(fn, b, f);
+		}
 		lbl = 1;
 		switch (b->jmp.type) {
 		case Jhlt:
 			fprintf(f, "\tud2\n");
 			break;
 		case Jret0:
+			/* The epilogue changes the CFA rules; the body's rules are restored after the ret. */
+			if (unw)
+				fputs("\t.cfi_remember_state\n", f);
 			if (fn->dynalloc)
 				fprintf(f,
 					"\tmovq %%rbp, %%rsp\n"
@@ -732,7 +1054,17 @@ amd64_sysv_emitfn(Fn *fn, FILE *f)
 				fprintf(f,
 					"\taddq $%"PRIu64", %%rsp\n",
 					e->fsz);
-			fputs("\tret\n", f);
+			if (last) {	/* the tail call: its jump takes the return's place */
+				e->tail = 1;
+				emitins(*last, e);
+				e->tail = 0;
+			} else {
+				if (e->fn->widevec)
+					fputs("\tvzeroupper\n", f);	/* the upper halves of the ymm registers are not the callee's */
+				fputs("\tret\n", f);
+			}
+			if (unw)
+				fputs("\t.cfi_restore_state\n", f);
 			break;
 		case Jjmp:
 		Jmp:
@@ -741,6 +1073,9 @@ amd64_sysv_emitfn(Fn *fn, FILE *f)
 					T.asloc, id0+b->s1->id);
 			else
 				lbl = 0;
+			break;
+		case Jjtab:
+			emitjtab(b, id0, e);
 			break;
 		default:
 			c = b->jmp.type - Jjf;
@@ -760,8 +1095,12 @@ amd64_sysv_emitfn(Fn *fn, FILE *f)
 		}
 	}
 	id0 += fn->nblk;
+	if (unw)
+		fputs("\t.cfi_endproc\n", f);
 	if (!T.apple)
 		elf_emitfnfin(fn->name, f);
+	emitjtabs(fn, id0 - fn->nblk, e);
+	ehfnend(fn, f);
 }
 
 static void
@@ -850,6 +1189,8 @@ amd64_winabi_emitfn(Fn *fn, FILE *f)
 				fprintf(f,
 					"\taddq $%"PRIu64", %%rsp\n",
 					e->fsz);
+			if (e->fn->widevec)
+				fputs("\tvzeroupper\n", f);
 			fputs("\tret\n", f);
 			break;
 		case Jjmp:
@@ -860,6 +1201,8 @@ amd64_winabi_emitfn(Fn *fn, FILE *f)
 			else
 				lbl = 0;
 			break;
+		case Jjtab:
+			die("jtab: not on the amd64_win target");
 		default:
 			c = b->jmp.type - Jjf;
 			if (0 <= c && c <= NCmp) {

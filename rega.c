@@ -15,17 +15,15 @@ struct RMap {
 	int n;
 };
 
-enum {
-	NPm = 64,      /* max copies in a parallel move */
-};
-
 static bits regu;      /* registers used */
 static Tmp *tmp;       /* function temporaries */
 static Mem *mem;       /* function mem references */
-static struct {
+typedef struct {
 	Ref src, dst;
 	int cls;
-} pm[NPm];             /* parallel move constructed */
+} PMove;
+static PMove *pm;      /* parallel move constructed (grows: a block
+                        * edge can need thousands of copies) */
 static int npm;        /* size of pm */
 static int loop;       /* current loop level */
 
@@ -194,8 +192,9 @@ mdump(RMap *m)
 static void
 pmadd(Ref src, Ref dst, int k)
 {
-	if (npm == NPm)
-		die("no more pm slots");
+	if (!pm)
+		pm = vnew(64, sizeof pm[0], PHeap);
+	vgrow(&pm, npm+1);
 	pm[npm].src = src;
 	pm[npm].dst = dst;
 	pm[npm].cls = k;
@@ -481,7 +480,7 @@ void
 rega(Fn *fn)
 {
 	int j, t, r, x, rl[Tmp0];
-	Blk *b, *b1, *s, ***ps, *blist, **blk, **bp;
+	Blk *b, *b1, *s, **ps, *blist, **blk, **bp;
 	RMap *end, *beg, cur, old, *m;
 	Ins *i;
 	Phi *p;
@@ -640,8 +639,11 @@ rega(Fn *fn)
 	/* 4. emit remaining copies in new blocks */
 	blist = 0;
 	for (b=fn->start;; b=b->link) {
-		ps = (Blk**[3]){&b->s1, &b->s2, (Blk*[1]){0}};
-		for (; (s=**ps); ps++) {
+		/* every successor slot (nfcxx: a jtab's table too): a move on an edge goes into a new block on that edge */
+		for (uint k=0; k<nsuccslot(b); k++) {
+			ps = succslot(b, k);
+			if (!(s=*ps))
+				continue;
 			npm = 0;
 			for (p=s->phi; p; p=p->link) {
 				dst = p->to;
@@ -679,7 +681,7 @@ rega(Fn *fn)
 			idup(b1, curi, &insb[NIns]-curi);
 			b1->jmp.type = Jjmp;
 			b1->s1 = s;
-			**ps = b1;
+			*ps = b1;
 		}
 		if (!b->link) {
 			b->link = blist;

@@ -100,9 +100,6 @@ typclass(Class *c, Typ *t, int *gp, int *fp)
 	c->nfp = 0;
 	c->align = 8;
 
-	if (t->align > 3)
-		err("alignments larger than 8 are not supported");
-
 	c->size = sz;
 	c->hfa.base = Kx;
 	c->ishfa = isfloatv(t, &c->hfa.base);
@@ -266,7 +263,21 @@ argsclass(Ins *i0, Ins *i1, Class *carg)
 			break;
 		case Oparc:
 		case Oargc:
+			/* AAPCS64: an aggregate with 16-byte alignment starts at an even general register */
 			typclass(c, &typ[i->arg[0].val], gp, fp);
+			/* only an aggregate passed in registers starts at an even register; one passed by pointer
+			 * (Cptr) is an ordinary 8-byte argument, and skipping a register for it leaves that register
+			 * live at entry (spill.c) and counted by the call */
+			if (!(c->class & (Cptr|Cstk)) && typ[i->arg[0].val].align > 3 && (gp-gpreg) & 1 && ngp > 0) {
+				gp++;
+				ngp--;
+				typclass(c, &typ[i->arg[0].val], gp, fp);
+			}
+			if (va && !(c->class & Cptr)) {
+				/* Apple arm64: a variadic aggregate is in the stack slots, like every variadic argument */
+				c->class = Cstk;
+				break;
+			}
 			if (c->ngp <= ngp) {
 				if (c->nfp <= nfp) {
 					ngp -= c->ngp;
@@ -344,17 +355,18 @@ static void
 stkblob(Ref r, Class *c, Fn *fn, Insl **ilp)
 {
 	Insl *il;
-	int al;
+	Ins ins[3];
+	int i, n;
 	uint64_t sz;
 
-	il = alloc(sizeof *il);
-	al = c->t->align - 2; /* NAlign == 3 */
-	if (al < 0)
-		al = 0;
 	sz = c->class & Cptr ? c->t->size : c->size;
-	il->i = (Ins){Oalloc+al, Kl, r, {getcon(sz, fn)}};
-	il->link = *ilp;
-	*ilp = il;
+	n = stkalloc(ins, r, c->t->align, sz, fn);
+	for (i=0; i<n; i++) {
+		il = alloc(sizeof *il);
+		il->i = ins[i];
+		il->link = *ilp;
+		*ilp = il;
+	}
 }
 
 static uint
@@ -363,12 +375,20 @@ align(uint x, uint al)
 	return (x + al-1) & -al;
 }
 
+static int
+isthrarg(Ref r, Fn *fn)
+{
+	return T.apple && rtype(r) == RCon && fn->con[r.val].type == CAddr
+		&& (fn->con[r.val].sym.type & SThr);
+}
+
 static void
 selcall(Fn *fn, Ins *i0, Ins *i1, Insl **ilp)
 {
+	struct { Ref orig, tmp; } tlv[64];
 	Ins *i;
 	Class *ca, *c, cr;
-	int op, cty;
+	int op, cty, ntlv;
 	uint n, stk, off;;
 	Ref r, rstk, tmp[4];
 
@@ -426,6 +446,22 @@ selcall(Fn *fn, Ins *i0, Ins *i1, Insl **ilp)
 		/* struct return argument */
 		emit(Ocopy, Kl, TMP(R8), i1->to, R);
 
+	/* An Apple thread-local address is a call to the TLS accessor, and it clobbers the caller-saved argument registers.
+	 * Its address is copied to a temporary first, and that copy is emitted after the register copies below, so it comes
+	 * before them in program order and no argument register is set before the accessor call. */
+	ntlv = 0;
+	for (i=i0, c=ca; i<i1; i++, c++) {
+		if ((c->class & Cstk) != 0)
+			continue;
+		if ((i->op == Oarg || i->op == Oarge || isargbh(i->op)) && isthrarg(i->arg[0], fn)) {
+			assert(ntlv < sizeof tlv / sizeof tlv[0]);
+			tlv[ntlv].orig = i->arg[0];
+			tlv[ntlv].tmp = newtmp("abi", Kl, fn);
+			i->arg[0] = tlv[ntlv].tmp;
+			ntlv++;
+		}
+	}
+
 	for (i=i0, c=ca; i<i1; i++, c++) {
 		if ((c->class & Cstk) != 0)
 			continue;
@@ -434,6 +470,8 @@ selcall(Fn *fn, Ins *i0, Ins *i1, Insl **ilp)
 		if (i->op == Oargc)
 			ldregs(c->reg, c->cls, c->nreg, i->arg[1], fn);
 	}
+	for (n=0; n<ntlv; n++)
+		emit(Ocopy, Kl, tlv[n].tmp, tlv[n].orig, R);
 
 	/* populate the stack */
 	off = 0;
@@ -484,6 +522,22 @@ selpar(Fn *fn, Ins *i0, Ins *i1)
 
 	cty = argsclass(i0, i1, ca);
 	fn->reg = arm64_argregs(CALL(cty), 0);
+	/* a general register skipped for a 16-byte aggregate (argsclass) is no argument: it is not live at entry */
+	{
+		bits used = 0, gpall = 0;
+		for (i=i0, c=ca; i<i1; i++, c++) {
+			if (c->class & Cstk)
+				continue;
+			if (i->op == Oparc && !(c->class & Cptr))
+				for (n=0; n<c->nreg; n++)
+					used |= BIT(c->reg[n]);
+			else
+				used |= BIT(c->reg[0]);
+		}
+		for (n=R0; n<=R7; n++)
+			gpall |= BIT(n);
+		fn->reg &= ~(gpall & ~used);
+	}
 
 	il = 0;
 	t = tmp;

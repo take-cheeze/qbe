@@ -44,6 +44,11 @@ O(xor,     T(w,l,e,e, w,l,e,e), F(1,1,0,1,1,0,0,0,0,0)) X(2,1,0) V(1)
 O(sar,     T(w,l,e,e, w,w,e,e), F(1,1,0,0,0,0,0,0,0,0)) X(1,1,0) V(1)
 O(shr,     T(w,l,e,e, w,w,e,e), F(1,1,0,0,0,0,0,0,0,0)) X(1,1,0) V(1)
 O(shl,     T(w,l,e,e, w,w,e,e), F(1,1,0,0,0,0,0,0,0,0)) X(1,1,0) V(1)
+O(xadd,    T(m,m,e,e, w,l,e,e), F(0,0,0,0,0,0,0,0,0,1)) X(0,0,0) V(0)   /* lock xadd: arg[0] the address, arg[1] the addend; the old value */
+/* Compare and exchange, as a pair (like sel0/sel1): cmpxchg0 arg[0] the address, arg[1] the expected value; the next
+   cmpxchg1 arg[0] that pair, arg[1] the desired value, and its result is the old value of the memory. */
+O(cmpxchg0, T(m,m,e,e, w,l,e,e), F(0,0,0,0,0,0,0,0,0,1)) X(0,0,0) V(0)
+O(cmpxchg1, T(w,l,e,e, w,l,e,e), F(0,0,0,0,0,0,0,0,0,1)) X(0,0,0) V(0)
 
 /* Comparisons */
 O(ceqw,    T(w,w,e,e, w,w,e,e), F(1,1,1,1,0,0,1,0,1,0)) X(0,1,0) V(0)
@@ -123,9 +128,9 @@ O(ultof,   T(e,e,l,l, e,e,x,x), F(1,0,0,0,0,0,0,0,0,0)) X(0,0,1) V(0)
 O(cast,    T(s,d,w,l, x,x,x,x), F(1,0,0,0,0,0,0,0,0,0)) X(0,0,1) V(0)
 
 /* Stack Allocation */
-O(alloc4,  T(e,l,e,e, e,x,e,e), F(0,0,0,0,0,0,0,0,0,1)) X(0,0,0) V(0)
-O(alloc8,  T(e,l,e,e, e,x,e,e), F(0,0,0,0,0,0,0,0,0,1)) X(0,0,0) V(0)
-O(alloc16, T(e,l,e,e, e,x,e,e), F(0,0,0,0,0,0,0,0,0,1)) X(0,0,0) V(0)
+O(alloc4,  T(w,l,e,e, x,x,e,e), F(0,0,0,0,0,0,0,0,0,1)) X(0,0,0) V(0)
+O(alloc8,  T(w,l,e,e, x,x,e,e), F(0,0,0,0,0,0,0,0,0,1)) X(0,0,0) V(0)
+O(alloc16, T(w,l,e,e, x,x,e,e), F(0,0,0,0,0,0,0,0,0,1)) X(0,0,0) V(0)
 
 /* Variadic Function Helpers */
 O(vaarg,   T(m,m,m,m, x,x,x,x), F(0,0,0,0,0,0,0,0,0,1)) X(0,0,0) V(0)
@@ -148,10 +153,13 @@ O(blit1,   T(w,e,e,e, x,e,e,e), F(0,0,0,0,0,0,0,0,0,1)) X(0,1,0) V(0)
 O(sel0,    T(w,e,e,e, x,e,e,e), F(0,0,0,0,0,0,0,0,0,1)) X(0,0,0) V(0)
 O(sel1,    T(w,l,e,e, w,l,e,e), F(0,0,0,0,0,0,0,0,0,1)) X(0,0,0) V(0)
 O(swap,    T(w,l,s,d, w,l,s,d), F(0,0,0,0,0,0,0,0,0,0)) X(1,0,0) V(0)
+O(lockadd, T(w,l,e,e, m,m,e,e), F(0,0,0,0,0,0,0,0,0,0)) X(1,0,0) V(0)   /* amd64: lock xadd arg[0] (in and out), arg[1] (memory) */
+O(lockcmpxchg, T(w,l,e,e, m,m,e,e), F(0,0,0,0,0,0,0,0,0,0)) X(1,0,0) V(0)   /* amd64: lock cmpxchg arg[0] (the desired value), arg[1] (memory); %rax is the expected value in and the old value out */
 O(sign,    T(w,l,e,e, x,x,e,e), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)
-O(salloc,  T(e,l,e,e, e,x,e,e), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)
+O(salloc,  T(w,l,e,e, x,x,e,e), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)
 O(xidiv,   T(w,l,e,e, x,x,e,e), F(0,0,0,0,0,0,0,0,0,0)) X(1,0,0) V(0)
 O(xdiv,    T(w,l,e,e, x,x,e,e), F(0,0,0,0,0,0,0,0,0,0)) X(1,0,0) V(0)
+O(xmul,    T(w,e,e,e, x,e,e,e), F(0,0,0,0,0,0,0,0,0,0)) X(1,0,0) V(0)
 O(xcmp,    T(w,l,s,d, w,l,s,d), F(0,0,0,0,0,0,0,0,0,0)) X(1,1,0) V(0)
 O(xtest,   T(w,l,e,e, w,l,e,e), F(0,0,0,0,0,0,0,0,0,0)) X(1,1,0) V(0)
 O(acmp,    T(w,l,e,e, w,l,e,e), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)
@@ -166,14 +174,14 @@ O(parsb,   T(x,x,x,x, x,x,x,x), F(0,0,0,0,0,0,0,0,0,1)) X(0,0,0) V(0)
 O(parub,   T(x,x,x,x, x,x,x,x), F(0,0,0,0,0,0,0,0,0,1)) X(0,0,0) V(0)
 O(parsh,   T(x,x,x,x, x,x,x,x), F(0,0,0,0,0,0,0,0,0,1)) X(0,0,0) V(0)
 O(paruh,   T(x,x,x,x, x,x,x,x), F(0,0,0,0,0,0,0,0,0,1)) X(0,0,0) V(0)
-O(parc,    T(e,x,e,e, e,x,e,e), F(0,0,0,0,0,0,0,0,0,1)) X(0,0,0) V(0)
+O(parc,    T(x,x,e,e, x,x,e,e), F(0,0,0,0,0,0,0,0,0,1)) X(0,0,0) V(0)
 O(pare,    T(e,x,e,e, e,x,e,e), F(0,0,0,0,0,0,0,0,0,1)) X(0,0,0) V(0)
 O(arg,     T(w,l,s,d, x,x,x,x), F(0,0,0,0,0,0,0,0,0,1)) X(0,0,0) V(0)
 O(argsb,   T(w,e,e,e, x,x,x,x), F(0,0,0,0,0,0,0,0,0,1)) X(0,0,0) V(0)
 O(argub,   T(w,e,e,e, x,x,x,x), F(0,0,0,0,0,0,0,0,0,1)) X(0,0,0) V(0)
 O(argsh,   T(w,e,e,e, x,x,x,x), F(0,0,0,0,0,0,0,0,0,1)) X(0,0,0) V(0)
 O(arguh,   T(w,e,e,e, x,x,x,x), F(0,0,0,0,0,0,0,0,0,1)) X(0,0,0) V(0)
-O(argc,    T(e,x,e,e, e,l,e,e), F(0,0,0,0,0,0,0,0,0,1)) X(0,0,0) V(0)
+O(argc,    T(x,x,e,e, m,m,e,e), F(0,0,0,0,0,0,0,0,0,1)) X(0,0,0) V(0)
 O(arge,    T(e,l,e,e, e,x,e,e), F(0,0,0,0,0,0,0,0,0,1)) X(0,0,0) V(0)
 O(argv,    T(x,x,x,x, x,x,x,x), F(0,0,0,0,0,0,0,0,0,1)) X(0,0,0) V(0)
 O(call,    T(m,m,m,m, x,x,x,x), F(0,0,0,0,0,0,0,0,0,1)) X(0,0,0) V(0)
@@ -217,6 +225,95 @@ O(xselflt,  T(e,e,s,d, e,e,s,d), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)
 O(xselfne,  T(e,e,s,d, e,e,s,d), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)
 O(xselfo,   T(e,e,s,d, e,e,s,d), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)
 O(xselfuo,  T(e,e,s,d, e,e,s,d), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)
+
+/* Vectors (vec.c, amd64 SSE): a vector value is a temporary of class Kd with Tmp.vec set, held in an
+   xmm register. The lane type is in the op name: w = 4 x int32, s = 4 x float, d = 2 x double.
+   vecload/vecstore move 16 bytes; the store's class is Kw (as for the scalar stores). */
+O(vecload,   T(e,e,e,m, e,e,e,e), F(0,0,0,0,0,0,0,0,0,1)) X(0,0,1) V(0)
+O(vecstore,  T(d,e,e,e, m,e,e,e), F(0,0,0,0,0,0,0,0,0,1)) X(0,0,1) V(0)
+O(vecbcastw, T(e,e,e,d, e,e,e,w), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)
+O(vecbcasts, T(e,e,e,d, e,e,e,s), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)
+O(vecbcastd, T(e,e,e,d, e,e,e,d), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)
+O(vecaddw,   T(e,e,e,d, e,e,e,d), F(0,0,0,1,0,0,0,0,0,0)) X(0,0,0) V(0)
+O(vecsubw,   T(e,e,e,d, e,e,e,d), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)
+O(vecandw,   T(e,e,e,d, e,e,e,d), F(0,0,0,1,0,0,0,0,0,0)) X(0,0,0) V(0)
+O(vecorw,    T(e,e,e,d, e,e,e,d), F(0,0,0,1,0,0,0,0,0,0)) X(0,0,0) V(0)
+O(vecxorw,   T(e,e,e,d, e,e,e,d), F(0,0,0,1,0,0,0,0,0,0)) X(0,0,0) V(0)
+O(vecadds,   T(e,e,e,d, e,e,e,d), F(0,0,0,1,0,0,0,0,0,0)) X(0,0,0) V(0)
+O(vecsubs,   T(e,e,e,d, e,e,e,d), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)
+O(vecmuls,   T(e,e,e,d, e,e,e,d), F(0,0,0,1,0,0,0,0,0,0)) X(0,0,0) V(0)
+O(vecdivs,   T(e,e,e,d, e,e,e,d), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)
+O(vecaddd,   T(e,e,e,d, e,e,e,d), F(0,0,0,1,0,0,0,0,0,0)) X(0,0,0) V(0)
+O(vecsubd,   T(e,e,e,d, e,e,e,d), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)
+O(vecmuld,   T(e,e,e,d, e,e,e,d), F(0,0,0,1,0,0,0,0,0,0)) X(0,0,0) V(0)
+O(vecdivd,   T(e,e,e,d, e,e,e,d), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)
+O(vecext0w,  T(d,e,e,e, e,e,e,e), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)   /* lane 0 of a vector, to a w */
+O(vecext1w,  T(d,e,e,e, e,e,e,e), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)   /* lane 1 of a vector, to a w */
+O(vecext2w,  T(d,e,e,e, e,e,e,e), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)   /* lane 2 of a vector, to a w */
+O(vecext3w,  T(d,e,e,e, e,e,e,e), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)   /* lane 3 of a vector, to a w */
+O(vecext0s, T(e,e,d,e, e,e,e,e), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)   /* lane 0 of a vector, to an s */
+O(vecext1s, T(e,e,d,e, e,e,e,e), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)   /* lane 1 */
+O(vecext2s, T(e,e,d,e, e,e,e,e), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)   /* lane 2 */
+O(vecext3s, T(e,e,d,e, e,e,e,e), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)   /* lane 3 */
+O(vecext0d, T(e,e,e,d, e,e,e,e), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)   /* lane 0 of a vector of doubles, to a d */
+O(vecext1d, T(e,e,e,d, e,e,e,e), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)   /* lane 1 */
+O(vecshufe, T(e,e,e,d, e,e,e,d), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)   /* shufps 0x88: the even lanes of two vectors */
+O(vecshufo, T(e,e,e,d, e,e,e,d), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)   /* shufps 0xdd: the odd lanes */
+O(vecunpckh32, T(e,e,e,d, e,e,e,d), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0) /* punpckhdq: interleave the high halves */
+O(vecunpcklpd, T(e,e,e,d, e,e,e,d), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0) /* unpcklpd: the low doubles */
+O(vecunpckhpd, T(e,e,e,d, e,e,e,d), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0) /* unpckhpd: the high doubles */
+O(vecceqw, T(e,e,e,d, e,e,e,d), F(0,0,0,1,0,0,0,0,0,0)) X(0,0,0) V(0)   /* pcmpeqd: a lane is all ones where equal */
+O(vecgtw, T(e,e,e,d, e,e,e,d), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)   /* pcmpgtd: a lane is all ones where signed greater */
+O(vecandn, T(e,e,e,d, e,e,e,d), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)  /* pandn: ~a & b */
+O(vecfeqs, T(e,e,e,d, e,e,e,d), F(0,0,0,1,0,0,0,0,0,0)) X(0,0,0) V(0)   /* cmpps eq: lanes all ones where equal (ordered) */
+O(vecflts, T(e,e,e,d, e,e,e,d), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)   /* cmpps lt */
+O(vecfles, T(e,e,e,d, e,e,e,d), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)   /* cmpps le */
+O(vecfeqd, T(e,e,e,d, e,e,e,d), F(0,0,0,1,0,0,0,0,0,0)) X(0,0,0) V(0)   /* cmppd eq */
+O(vecfltd, T(e,e,e,d, e,e,e,d), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)   /* cmppd lt */
+O(vecfled, T(e,e,e,d, e,e,e,d), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)   /* cmppd le */
+O(vecload8, T(e,e,e,m, e,e,e,e), F(0,0,0,0,0,0,0,0,0,1)) X(0,0,1) V(0)   /* movq: two w lanes (low 64 bits) */
+O(vecstore8, T(d,e,e,e, m,e,e,e), F(0,0,0,0,0,0,0,0,0,1)) X(0,0,1) V(0)  /* movq: the low 64 bits */
+O(vecw2d, T(e,e,e,d, e,e,e,e), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)     /* cvtdq2pd: two w lanes to two doubles */
+O(vecd2w, T(e,e,e,d, e,e,e,e), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)     /* cvttpd2dq: two doubles to two w lanes */
+O(vecmulw, T(e,e,e,d, e,e,e,d), F(0,0,0,1,0,0,0,0,0,0)) X(0,0,0) V(0)   /* mul.4s (NEON only; amd64 uses the pmuludq sequence) */
+O(vecmuludq, T(e,e,e,d, e,e,e,d), F(0,0,0,1,0,0,0,0,0,0)) X(0,0,0) V(0)   /* pmuludq: the products of the even lanes, 64-bit */
+O(vecsrlq32, T(e,e,e,d, e,e,e,e), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)   /* psrlq 32: each 64-bit lane shifted down */
+O(vecpack02, T(e,e,e,d, e,e,e,e), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)   /* pshufd 0x88: lanes 0 and 2 to the low half */
+O(vecunpckl32, T(e,e,e,d, e,e,e,d), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0) /* punpckldq: interleave the low halves */
+/* 256-bit (AVX2) forms of the vector ops a plain int32 or float32 loop uses: vec.c emits these for -Y */
+O(vecbcasts256, T(e,e,e,d, e,e,e,s), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0) /* vbroadcastss: a float to all eight lanes */
+O(vecload256,  T(e,e,e,m, e,e,e,e), F(0,0,0,0,0,0,0,0,0,1)) X(0,0,1) V(0)  /* vmovups: 32 bytes */
+O(vecstore256, T(d,e,e,e, m,e,e,e), F(0,0,0,0,0,0,0,0,0,1)) X(0,0,1) V(0)  /* vmovups: 32 bytes */
+O(vecbcastw256, T(e,e,e,d, e,e,e,w), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0) /* vpbroadcastd of a word */
+O(vecaddw256, T(e,e,e,d, e,e,e,d), F(0,0,0,1,0,0,0,0,0,0)) X(0,0,0) V(0)  /* vpaddd */
+O(vecsubw256, T(e,e,e,d, e,e,e,d), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)  /* vpsubd */
+O(vecmulw256, T(e,e,e,d, e,e,e,d), F(0,0,0,1,0,0,0,0,0,0)) X(0,0,0) V(0)  /* vpmulld */
+O(vecandw256, T(e,e,e,d, e,e,e,d), F(0,0,0,1,0,0,0,0,0,0)) X(0,0,0) V(0)  /* vpand */
+O(vecorw256, T(e,e,e,d, e,e,e,d), F(0,0,0,1,0,0,0,0,0,0)) X(0,0,0) V(0)   /* vpor */
+O(vecxorw256, T(e,e,e,d, e,e,e,d), F(0,0,0,1,0,0,0,0,0,0)) X(0,0,0) V(0)  /* vpxor */
+O(vecadds256, T(e,e,e,d, e,e,e,d), F(0,0,0,1,0,0,0,0,0,0)) X(0,0,0) V(0)  /* vaddps */
+O(vecsubs256, T(e,e,e,d, e,e,e,d), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)  /* vsubps */
+O(vecmuls256, T(e,e,e,d, e,e,e,d), F(0,0,0,1,0,0,0,0,0,0)) X(0,0,0) V(0)  /* vmulps */
+O(vecdivs256, T(e,e,e,d, e,e,e,d), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)  /* vdivps */
+O(vecceqw256, T(e,e,e,d, e,e,e,d), F(0,0,0,1,0,0,0,0,0,0)) X(0,0,0) V(0)  /* vpcmpeqd: a lane is all ones where equal */
+O(vecgtw256, T(e,e,e,d, e,e,e,d), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)  /* vpcmpgtd: all ones where signed a > b */
+O(vecandn256, T(e,e,e,d, e,e,e,d), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)  /* vpandn: ~a & b */
+O(vecfeqs256, T(e,e,e,d, e,e,e,d), F(0,0,0,1,0,0,0,0,0,0)) X(0,0,0) V(0)  /* vcmpps eq (ordered) */
+O(vecflts256, T(e,e,e,d, e,e,e,d), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)  /* vcmpps lt */
+O(vecfles256, T(e,e,e,d, e,e,e,d), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)  /* vcmpps le */
+O(vecaddd256, T(e,e,e,d, e,e,e,d), F(0,0,0,1,0,0,0,0,0,0)) X(0,0,0) V(0)  /* vaddpd */
+O(vecsubd256, T(e,e,e,d, e,e,e,d), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)  /* vsubpd */
+O(vecmuld256, T(e,e,e,d, e,e,e,d), F(0,0,0,1,0,0,0,0,0,0)) X(0,0,0) V(0)  /* vmulpd */
+O(vecdivd256, T(e,e,e,d, e,e,e,d), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)  /* vdivpd */
+O(vecbcastd256, T(e,e,e,d, e,e,e,d), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0) /* vbroadcastsd: a double to all four lanes */
+O(vecfeqd256, T(e,e,e,d, e,e,e,d), F(0,0,0,1,0,0,0,0,0,0)) X(0,0,0) V(0)  /* vcmppd eq (ordered) */
+O(vecfltd256, T(e,e,e,d, e,e,e,d), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)  /* vcmppd lt */
+O(vecfled256, T(e,e,e,d, e,e,e,d), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)  /* vcmppd le */
+O(vecfold256, T(e,e,e,d, e,e,e,d), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)  /* vextracti128: the high 128 bits of a ymm, as an xmm */
+O(vecloadst, T(e,e,e,m, e,e,e,e), F(0,0,0,0,0,0,0,0,0,1)) X(0,0,1) V(0)  /* vlse32 with an 8-byte stride (RVV stride-2 loads) */
+O(vecstorest, T(d,e,e,e, m,e,e,e), F(0,0,0,0,0,0,0,0,0,1)) X(0,0,1) V(0)  /* vsse32 with an 8-byte stride */
+O(vecloadstd, T(e,e,e,m, e,e,e,e), F(0,0,0,0,0,0,0,0,0,1)) X(0,0,1) V(0)  /* vlse64 with a 16-byte stride (RVV double stride-2 loads) */
+O(vecstorestd, T(d,e,e,e, m,e,e,e), F(0,0,0,0,0,0,0,0,0,1)) X(0,0,1) V(0)  /* vsse64 with a 16-byte stride */
 
 #undef T
 #undef X
