@@ -247,6 +247,10 @@ O(vecaddd,   T(e,e,e,d, e,e,e,d), F(0,0,0,1,0,0,0,0,0,0)) X(0,0,0) V(0)
 O(vecsubd,   T(e,e,e,d, e,e,e,d), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)
 O(vecmuld,   T(e,e,e,d, e,e,e,d), F(0,0,0,1,0,0,0,0,0,0)) X(0,0,0) V(0)
 O(vecdivd,   T(e,e,e,d, e,e,e,d), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)
+O(vecext0w,  T(d,e,e,e, e,e,e,e), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)   /* lane 0 of a vector, to a w */
+O(vecext1w,  T(d,e,e,e, e,e,e,e), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)   /* lane 1 of a vector, to a w */
+O(vecext2w,  T(d,e,e,e, e,e,e,e), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)   /* lane 2 of a vector, to a w */
+O(vecext3w,  T(d,e,e,e, e,e,e,e), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)   /* lane 3 of a vector, to a w */
 
 #undef T
 #undef X

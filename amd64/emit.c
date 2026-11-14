@@ -519,6 +519,21 @@ emitins(Ins i, E *e)
 		}
 		emitf(omap[o].fmt, &i, e);
 		break;
+	case Ovecext0w:
+		emitf("movd %0, %W=", &i, e);
+		break;
+	case Ovecext1w:
+		emitf("pshufd $1, %0, %%xmm15", &i, e);
+		emitf("movd %%xmm15, %W=", &i, e);
+		break;
+	case Ovecext2w:
+		emitf("pshufd $2, %0, %%xmm15", &i, e);
+		emitf("movd %%xmm15, %W=", &i, e);
+		break;
+	case Ovecext3w:
+		emitf("pshufd $3, %0, %%xmm15", &i, e);
+		emitf("movd %%xmm15, %W=", &i, e);
+		break;
 	case Ovecbcastw:
 		/* the scalar into lane 0, then lane 0 into all four (pshufd) */
 		emitf("movd %W0, %=", &i, e);

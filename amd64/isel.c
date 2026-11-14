@@ -502,6 +502,11 @@ Emit:
 	case Ovecmuld:
 	case Ovecdivd:
 		goto Emit;
+	case Ovecext0w:
+	case Ovecext1w:
+	case Ovecext2w:
+	case Ovecext3w:
+		goto Emit;
 	default:
 		if (isext(i.op))
 			goto case_Oext;
