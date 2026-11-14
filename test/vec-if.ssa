@@ -1,0 +1,120 @@
+# Loops with an if in the body, vectorized by if-conversion: the comparison's mask selects each lane's path.
+# dia: a diamond whose two paths meet in a phi (the value stored after the join).
+# tri: a triangle whose true path stores.
+# both: a diamond whose two paths store.
+
+export
+function w $dia(l %a, l %b, w %n) {
+@start
+@head
+	%i =w phi @start 0, @latch %i2
+	%c0 =w csltw %i, %n
+	jnz %c0, @body, @done
+@body
+	%t =l extsw %i
+	%o =l mul %t, 4
+	%pb =l add %b, %o
+	%x =w loadsw %pb
+	%c =w csltw %x, 10
+	jnz %c, @then, @else
+@then
+	%t1 =w add %x, 100
+	jmp @join
+@else
+	%t2 =w sub %x, 2
+	jmp @join
+@join
+	%r =w phi @then %t1, @else %t2
+	%pa =l add %a, %o
+	storew %r, %pa
+	jmp @latch
+@latch
+	%i2 =w add %i, 1
+	jmp @head
+@done
+	ret 0
+}
+
+export
+function w $tri(l %a, l %b, w %n) {
+@start
+@head
+	%i =w phi @start 0, @latch %i2
+	%c0 =w csltw %i, %n
+	jnz %c0, @body, @done
+@body
+	%t =l extsw %i
+	%o =l mul %t, 4
+	%pb =l add %b, %o
+	%x =w loadsw %pb
+	%c =w csgew %x, 0
+	jnz %c, @then, @join
+@then
+	%t1 =w mul %x, 3
+	%pa =l add %a, %o
+	storew %t1, %pa
+	jmp @join
+@join
+	jmp @latch
+@latch
+	%i2 =w add %i, 1
+	jmp @head
+@done
+	ret 0
+}
+
+export
+function w $both(l %a, l %b, w %n) {
+@start
+@head
+	%i =w phi @start 0, @latch %i2
+	%c0 =w csltw %i, %n
+	jnz %c0, @body, @done
+@body
+	%t =l extsw %i
+	%o =l mul %t, 4
+	%pb =l add %b, %o
+	%x =w loadsw %pb
+	%pa =l add %a, %o
+	%c =w cslew %x, 5
+	jnz %c, @then, @else
+@then
+	%t1 =w add %x, 100
+	storew %t1, %pa
+	jmp @join
+@else
+	%t2 =w sub %x, 7
+	storew %t2, %pa
+	jmp @join
+@join
+	jmp @latch
+@latch
+	%i2 =w add %i, 1
+	jmp @head
+@done
+	ret 0
+}
+
+# >>> driver
+# #include <stdio.h>
+# void dia(int *, int *, int);
+# void tri(int *, int *, int);
+# void both(int *, int *, int);
+# int A[80], B[80], R[80];
+# int main() {
+# 	int n, i, bad = 0;
+# 	for (n = 0; n <= 30; n++) {
+# 		for (i = 0; i < 80; i++) { A[i] = -1; B[i] = (i * 37) % 23 - 9; }
+# 		dia(A, B, n);
+# 		for (i = 0; i < 80; i++) { int w = i < n ? (B[i] < 10 ? B[i] + 100 : B[i] - 2) : -1; if (A[i] != w) bad++; }
+# 		for (i = 0; i < 80; i++) { A[i] = -1; }
+# 		tri(A, B, n);
+# 		for (i = 0; i < 80; i++) { int w = (i < n && B[i] >= 0) ? B[i] * 3 : -1; if (A[i] != w) bad++; }
+# 		for (i = 0; i < 80; i++) { A[i] = -1; }
+# 		both(A, B, n);
+# 		for (i = 0; i < 80; i++) { int w = i < n ? (B[i] <= 5 ? B[i] + 100 : B[i] - 7) : -1; if (A[i] != w) bad++; }
+# 	}
+# 	printf("bad=%d\n", bad);
+# 	return bad != 0;
+# }
+# <<<

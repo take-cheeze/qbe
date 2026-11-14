@@ -62,18 +62,29 @@ enum {
 	LW,	/* 4 x int32 */
 	LS,	/* 4 x float */
 	LD,	/* 2 x double */
+	LM,	/* a mask: the lanes of a comparison (w) */
 };
 
 enum {
 	NBREF = 8,	/* the distinct bases of a loop */
 	NRED = 4,	/* the reductions of a loop */
 	NACC = 32,	/* the element accesses of a loop */
+	NBODY = 32,	/* the blocks of a loop body */
 };
 
 typedef struct Loop Loop;
 struct Loop {
 	Blk *H, *P, *L;
-	Blk *body[17];
+	Blk *body[NBODY];
+	int guard[NBODY];	/* per body block: 0 always, 1 on the true path, 2 on the false path */
+	Blk *cb, *tb, *fb, *join;	/* the condition's block, its true and false blocks (fb 0 for a triangle), the join */
+	int hascond;
+	int lastsel;	/* a sel0 was seen: the sel1 after it selects by its mask */
+	int nmask;	/* the masks of the body (compares used by a select or the branch) */
+	Ref selm;	/* build: the mask of the last sel0 */
+	Ref cond;	/* the condition: a temporary of cb's jnz */
+	Ref cmask;	/* build: the mask of the condition */
+	Ref vones;	/* build: all ones, for the complements of masks */
 	uint nbody;
 	Phi *ph;	/* the induction phi */
 	int ia;		/* index in ph of the value from P; 1 - ia is the latch's */
@@ -124,6 +135,9 @@ struct Loop {
 	Ref redrd[NRED];	/* build: the folded scalar value (Rd) */
 	int redcls[NRED];	/* the class of the accumulator: Kw, or Ks and Kd with -F */
 };
+
+static int lanecmp(int op);
+static int issel0(Fn *fn, int tn);
 
 struct Stats {
 	int nld, nst;
@@ -382,6 +396,50 @@ classify(Fn *fn, Loop *lp, Ins *ins, struct Stats *st)
 			st->hasws = 1;
 		return 1;
 	}
+	/* the select form of an if (ifopt's sel0 and sel1): sel0 names the mask, sel1 selects two lanes by it */
+	if (ins->op == Osel0) {
+		if (rtype(a0) != RTmp || lp->lane[a0.val] != LM)
+			return 0;
+		lp->lastsel = 1;
+		return 1;
+	}
+	if (ins->op == Osel1) {
+		if (ins->cls != Kw || tn < 0 || !lp->lastsel)
+			return 0;
+		for (j=0; j<2; j++) {
+			if (rtype(ins->arg[j]) != RTmp || lp->lane[ins->arg[j].val] != LW)
+				return 0;
+		}
+		lp->lane[tn] = LW;
+		lp->dch[tn] = 1;
+		st->nvec++;
+		st->hasws = 1;
+		return 1;
+	}
+	/* the mask of the if: the lanes' comparison (only the jnz or a sel0 uses it) */
+	if (tn >= 0 && lanecmp(ins->op) >= 0 && ins->cls == Kw && fn->tmp[tn].nuse == 1 &&
+	    (lp->hascond ? req(to, lp->cond) : issel0(fn, tn))) {
+		if (lanecmp(ins->op) < 0 || ins->cls != Kw || fn->tmp[tn].nuse != 1)
+			return 0;
+		nlane = 0;
+		a[0] = a0;
+		a[1] = a1;
+		for (j=0; j<2; j++) {
+			if (rtype(a[j]) == RTmp && lp->lane[a[j].val] == LW)
+				nlane++;
+			else if (isinv(fn, lp, a[j], Kw) || (rtype(a[j]) == RCon && conint(fn, a[j], &c)))
+				;
+			else
+				return 0;
+		}
+		if (nlane == 0)
+			return 0;
+		lp->lane[tn] = LM;
+		lp->dch[tn] = 1;
+		st->nvec++;
+		st->hasws = 1;
+		return 1;
+	}
 	/* arithmetic on lanes */
 	k = ins->cls;
 	kind = k == Kw ? LW : k == Ks ? LS : k == Kd ? LD : LNone;
@@ -411,6 +469,70 @@ classify(Fn *fn, Loop *lp, Ins *ins, struct Stats *st)
 	else
 		st->hasws = 1;
 	return 1;
+}
+
+/* a lane comparison: its kind, or -1 (signed, w) */
+enum { CEq, CNe, CLt, CLe, CGt, CGe };
+
+static int
+lanecmp(int op)
+{
+	switch (op) {
+	case Oceqw: return CEq;
+	case Ocnew: return CNe;
+	case Ocsltw: return CLt;
+	case Ocslew: return CLe;
+	case Ocsgtw: return CGt;
+	case Ocsgew: return CGe;
+	}
+	return -1;
+}
+
+/* the join's phis: each is a select of two lanes (or invariants) of the same width */
+static int
+classifyjoin(Fn *fn, Loop *lp, struct Stats *st)
+{
+	Phi *p;
+	int a, kd;
+	int64_t c;
+	Ref r;
+
+	for (p=lp->join->phi; p; p=p->link) {
+		if (p->narg != 2)
+			return 0;
+		kd = p->cls == Kw ? LW : p->cls == Ks ? LS : p->cls == Kd ? LD : LNone;
+		if (kd == LNone)
+			return 0;
+		for (a=0; a<2; a++) {
+			r = p->arg[a];
+			if (rtype(r) == RTmp && lp->lane[r.val] == kd)
+				;
+			else if (isinv(fn, lp, r, p->cls) || (rtype(r) == RCon && conint(fn, r, &c)))
+				;
+			else
+				return 0;
+		}
+		lp->lane[p->to.val] = kd;
+		lp->dch[p->to.val] = 1;
+		st->nvec++;
+		if (kd == LD)
+			st->hasd = 1;
+		else
+			st->hasws = 1;
+	}
+	return 1;
+}
+
+/* a comparison whose only use is the sel0 that ifopt makes of a select */
+static int
+issel0(Fn *fn, int tn)
+{
+	Use *u;
+
+	if (fn->tmp[tn].nuse != 1)
+		return 0;
+	u = fn->tmp[tn].use;
+	return u->type == UIns && u->u.ins->op == Osel0;
 }
 
 /* the signed compare of the exit test, its kind (see Loop.cmpop), or -1 */
@@ -476,12 +598,52 @@ findloop(Fn *fn, Blk *H, Loop *lp)
 	if (!ph || ph->narg != 2 || ph->cls != cmp->cls)
 		return rej(__LINE__);
 
-	/* the body chain: one predecessor each, no phi, a jmp; the last one jumps back to H */
+	/* the body: a chain of blocks with one predecessor each, up to the latch (which jumps back to H); an if
+	 * may sit in it, as a diamond or a triangle, that meets in a join block with phis */
 	lp->nbody = 0;
+	lp->hascond = 0;
+	lp->lastsel = 0;
+	lp->nmask = 0;
+	lp->cb = lp->tb = lp->fb = lp->join = 0;
 	B = H->s1;
 	for (;;) {
-		if (!B || B == H || B->npred != 1 || B->phi || B->jmp.type != Jjmp || lp->nbody >= 16)
+		if (!B || B == H || lp->nbody >= NBODY-4)
 			return rej(__LINE__);
+		if (B->jmp.type == Jjnz) {
+			Blk *Tb = B->s1, *Fb = B->s2, *J;
+			if (lp->hascond || B->npred != 1 || B->phi || Tb->npred != 1 || Tb->phi || Tb->jmp.type != Jjmp)
+				return rej(__LINE__);
+			if (Fb != Tb && Fb->jmp.type == Jjmp && Fb->npred == 1 && !Fb->phi && Fb->s1 == Tb->s1) {
+				J = Tb->s1;	/* a diamond */
+				lp->fb = Fb;
+			} else if (Fb == Tb->s1) {
+				J = Fb;		/* a triangle: the false path is the condition's own edge */
+				lp->fb = 0;
+			} else
+				return rej(__LINE__);
+			if (J == H || J->npred != 2 || rtype(B->jmp.arg) != RTmp)
+				return rej(__LINE__);
+			lp->hascond = 1;
+			lp->cb = B;
+			lp->tb = Tb;
+			lp->join = J;
+			lp->cond = B->jmp.arg;
+			lp->guard[lp->nbody] = 0;
+			lp->body[lp->nbody++] = B;
+			lp->guard[lp->nbody] = 1;
+			lp->body[lp->nbody++] = Tb;
+			if (lp->fb) {
+				lp->guard[lp->nbody] = 2;
+				lp->body[lp->nbody++] = lp->fb;
+			}
+			B = J;
+			continue;
+		}
+		if (B->jmp.type != Jjmp)
+			return rej(__LINE__);
+		if (B == lp->join ? B->npred != 2 : (B->npred != 1 || B->phi))
+			return rej(__LINE__);
+		lp->guard[lp->nbody] = 0;
 		lp->body[lp->nbody++] = B;
 		if (B->s1 == H)
 			break;
@@ -570,6 +732,8 @@ findloop(Fn *fn, Blk *H, Loop *lp)
 		lp->inl[p->to.val] = 1;
 	for (k=0; k<lp->nbody; k++) {
 		b = lp->body[k];
+		for (p=b->phi; p; p=p->link)
+			lp->inl[p->to.val] = 1;
 		for (ins=b->ins; ins<&b->ins[b->nins]; ins++)
 			if (rtype(ins->to) == RTmp)
 				lp->inl[ins->to.val] = 1;
@@ -588,6 +752,8 @@ findloop(Fn *fn, Blk *H, Loop *lp)
 	found = 0;
 	for (k=0; k<lp->nbody; k++) {
 		b = lp->body[k];
+		if (b == lp->join && !classifyjoin(fn, lp, &st))
+			return rej(__LINE__);
 		for (ins=b->ins; ins<&b->ins[b->nins]; ins++) {
 			if (ins->op == Onop || ins->op == Odbgloc)
 				continue;
@@ -597,8 +763,11 @@ findloop(Fn *fn, Blk *H, Loop *lp)
 				found = 1;
 				continue;
 			}
-			if (!classify(fn, lp, ins, &st))
+			if (!classify(fn, lp, ins, &st)) {
+				if (debug['V'])
+					fprintf(stderr, "vec: ins %s (cls %d) to %d refused\n", optab[ins->op].name, ins->cls, rtype(ins->to)==RTmp ? (int)ins->to.val : -1);
 				return rej(__LINE__);
+			}
 		}
 	}
 	if (!found || st.nvec == 0 || st.nld + st.nst == 0)
@@ -606,10 +775,22 @@ findloop(Fn *fn, Blk *H, Loop *lp)
 	for (k=0; k<(uint)nr; k++)
 		if (!lp->redseen[k])
 			return rej(__LINE__);
+	if (lp->hascond) {
+		if (lp->lane[lp->cond.val] != LM || lp->anystrd)
+			return rej(__LINE__);	/* the condition is a comparison in the body; strided accesses are not conditional */
+		for (k=0; k<lp->nbody; k++)
+			if (lp->guard[k])
+				for (ins=lp->body[k]->ins; ins<&lp->body[k]->ins[lp->body[k]->nins]; ins++)
+					if (rtype(ins->to) == RTmp && lp->redof[ins->to.val] < 0)
+						return rej(__LINE__);	/* a reduction in a conditional path */
+	}
 	if (st.hasd && st.hasws)
 		return rej(__LINE__);
 	lp->vf = st.hasd ? 2 : 4;
 	lp->nst = st.nst;
+	for (t=Tmp0; t<nt; t++)
+		if (lp->lane[t] == LM)
+			lp->nmask++;
 	if (lp->idata && lp->vf != 4)
 		return rej(__LINE__);	/* the induction's lanes are four w lanes */
 	if (lp->anystrd && lp->ivstep < 0)
@@ -835,6 +1016,61 @@ overlaps(Fn *fn, Loop *lp, Ref init)
 	return ov;
 }
 
+/* the mask of a lane comparison of two vectors (all ones where it holds) */
+static Ref
+vcmp(Fn *fn, Loop *lp, int op, Ref a, Ref b)
+{
+	Ref t, r;
+
+	switch (op) {
+	case CEq:
+		t = newvec(fn);
+		push(Ovecceqw, Kd, t, a, b);
+		return t;
+	case CNe:
+		t = newvec(fn);
+		push(Ovecceqw, Kd, t, a, b);
+		r = newvec(fn);
+		push(Ovecxorw, Kd, r, t, lp->vones);
+		return r;
+	case CGt:
+		t = newvec(fn);
+		push(Ovecgtw, Kd, t, a, b);
+		return t;
+	case CLt:
+		t = newvec(fn);
+		push(Ovecgtw, Kd, t, b, a);
+		return t;
+	case CGe:	/* a >= b: not b > a */
+		t = newvec(fn);
+		push(Ovecgtw, Kd, t, b, a);
+		r = newvec(fn);
+		push(Ovecxorw, Kd, r, t, lp->vones);
+		return r;
+	default:	/* CLe: not a > b */
+		t = newvec(fn);
+		push(Ovecgtw, Kd, t, a, b);
+		r = newvec(fn);
+		push(Ovecxorw, Kd, r, t, lp->vones);
+		return r;
+	}
+}
+
+/* m ? a : b, lane by lane: (a & m) | (~m & b) */
+static Ref
+vsel(Fn *fn, Ref m, Ref a, Ref b)
+{
+	Ref t1, t2, r;
+
+	t1 = newvec(fn);
+	push(Ovecandw, Kd, t1, a, m);
+	t2 = newvec(fn);
+	push(Ovecandn, Kd, t2, m, b);
+	r = newvec(fn);
+	push(Ovecorw, Kd, r, t1, t2);
+	return r;
+}
+
 /* the 16-byte buffer of the induction lanes: an alloc16 at the start of the entry block, made once per function */
 static Ref vbuf;
 static int vbufset;
@@ -917,6 +1153,12 @@ build(Fn *fn, Loop *lp)
 		lp->redvn[k] = R;
 		lp->redrd[k] = R;
 	}
+	if (lp->hascond || lp->nmask) {
+		Ref oc = newtmp("vec", Kw, fn);
+		push(Ocopy, Kw, oc, getcon(-1, fn), R);
+		lp->vones = newvec(fn);
+		push(Ovecbcastw, Kd, lp->vones, oc, R);
+	}
 	if (lp->idata) {
 		/* vi = the lanes iv + j at P (the first window's), with a 16-byte buffer in the entry block */
 		Ref buf = getbuf(fn), sb, lj, ad, bc;
@@ -973,11 +1215,47 @@ build(Fn *fn, Loop *lp)
 		push(Osub, lp->ivcls, vb, iv, getcon(lp->vf - 1, fn));
 	for (k=0; k<lp->nbody; k++) {
 		b = lp->body[k];
+		if (b == lp->join) {
+			/* each join phi selects its true path's lanes where the condition holds */
+			for (p=b->phi; p; p=p->link) {
+				int kd = p->cls == Kw ? LW : p->cls == Ks ? LS : LD;
+				Ref argt = R, argf = R, vt, vf;
+				int aa;
+
+				for (aa=0; aa<2; aa++) {
+					if (p->blk[aa] == lp->tb)
+						argt = p->arg[aa];
+					else
+						argf = p->arg[aa];
+				}
+				vt = laneop(fn, lp, argt, p->cls, kd);
+				vf = laneop(fn, lp, argf, p->cls, kd);
+				lp->map[p->to.val] = vsel(fn, lp->cmask, vt, vf);
+			}
+		}
 		for (ins=b->ins; ins<&b->ins[b->nins]; ins++) {
 			if (ins->op == Onop || ins->op == Odbgloc)
 				continue;
 			if (req(ins->to, lp->lat))
 				continue;
+			if (rtype(ins->to) == RTmp && lp->lane[ins->to.val] == LM) {
+				/* a condition: the lanes' comparison, its mask */
+				Ref a0c = laneop(fn, lp, ins->arg[0], Kw, LW);
+				Ref a1c = laneop(fn, lp, ins->arg[1], Kw, LW);
+				lp->cmask = vcmp(fn, lp, lanecmp(ins->op), a0c, a1c);
+				lp->map[ins->to.val] = lp->cmask;
+				continue;
+			}
+			if (ins->op == Osel0) {
+				lp->selm = lp->map[ins->arg[0].val];
+				continue;
+			}
+			if (ins->op == Osel1) {
+				Ref a0s = laneop(fn, lp, ins->arg[0], Kw, LW);
+				Ref a1s = laneop(fn, lp, ins->arg[1], Kw, LW);
+				lp->map[ins->to.val] = vsel(fn, lp->selm, a0s, a1s);
+				continue;
+			}
 			/* a reduction's latch: the vector accumulator, folded with its lane */
 			if (rtype(ins->to) == RTmp && lp->redof[ins->to.val] < 0) {
 				rk = -lp->redof[ins->to.val] - 1;
@@ -1019,6 +1297,16 @@ build(Fn *fn, Loop *lp)
 			case Ostorew:
 			case Ostores:
 			case Ostored:
+				if (lp->guard[k]) {
+					/* a store on one path: the lanes of the other path keep the old values */
+					Ref x = req(ins->arg[0], lp->i) ? lp->vi : lp->map[ins->arg[0].val];
+					Ref old = newvec(fn), nv;
+
+					push(Ovecload, Kd, old, cloneref(lp, ins->arg[1]), R);
+					nv = lp->guard[k] == 1 ? vsel(fn, lp->cmask, x, old) : vsel(fn, lp->cmask, old, x);
+					push(Ovecstore, Kw, R, nv, cloneref(lp, ins->arg[1]));
+					continue;
+				}
 				if (lp->strd[ins->arg[1].val]) {
 					/* the value's lanes go to the even positions of two vectors; the odd ones keep their values */
 					Ref a0 = cloneref(lp, ins->arg[1]);
@@ -1196,6 +1484,8 @@ vec(Fn *fn)
 	for (k=0; k<nc; k++) {
 		filluse(fn);
 		memset(&lp, 0, sizeof lp);
+		if (debug['W'])
+			printfn(fn, stderr);	/* -d W: the IR the pass sees */
 		if (findloop(fn, cand[k], &lp)) {
 			if (debug['V'])
 				fprintf(stderr, "vec: %s: loop at @%d, %d lanes, %d bases, %d reductions\n", fn->name,
