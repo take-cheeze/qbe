@@ -553,6 +553,23 @@ wflagi(Ins *fi, Ref r, int *k, int *c)
 	return !KWIDE(fi->cls);
 }
 
+/* nfcxx: the compare that defines the condition of a select, when other instructions lie between the two (the arms of a
+ * diamond that ifopt turned into a select, and those may set the flags). selsel regenerates the compare right before the
+ * conditional moves, so the flags the moves read are its own. Only a condition with a single use is moved, and not one
+ * whose result is tested for equality (those take the copy path in selsel). */
+static Ins *
+defcmp(Ins *i0, Ins *i, Ref r)
+{
+	int k, c;
+
+	while (i>i0) {
+		i--;
+		if (req(i->to, r))
+			return iscmp(i->op, &k, &c) && c != NCmpI+Cfeq && c != NCmpI+Cfne ? i : 0;
+	}
+	return 0;
+}
+
 static Ins*
 selsel(Fn *fn, Blk *b, Ins *i, Num *tn)
 {
@@ -572,6 +589,13 @@ selsel(Fn *fn, Blk *b, Ins *i, Num *tn)
 	assert(rtype(r) == RTmp);
 	t = &fn->tmp[r.val];
 	fi = flagi(b->ins, isel0);
+	/* the instruction next to the select may set the flags without defining the condition (an arm's sub): then the
+	 * condition's own compare is the one to regenerate */
+	if ((!fi || !req(fi->to, r)) && t->nuse == 1) {
+		Ins *fc = defcmp(b->ins, isel0, r);
+		if (fc)
+			fi = fc;
+	}
 	cr[0] = cr[1] = R;
 	gencmp = gencpy = swap = 0;
 	k = Kw;
