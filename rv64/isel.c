@@ -172,6 +172,19 @@ selcmp(Ins i, int k, int op, Fn *fn)
 	fixarg(&icmp->arg[1], k, icmp, fn);
 }
 
+/* the vector ops of vec.c (-Y) */
+static int
+isvecop(int op)
+{
+	switch (op) {
+	case Ovecload: case Ovecstore: case Ovecbcastw: case Ovecbcasts:
+	case Ovecaddw: case Ovecsubw: case Ovecmulw: case Ovecandw: case Ovecorw: case Ovecxorw:
+	case Ovecadds: case Ovecsubs: case Ovecmuls: case Ovecdivs:
+		return 1;
+	}
+	return 0;
+}
+
 static void
 sel(Ins i, Fn *fn)
 {
@@ -186,6 +199,11 @@ sel(Ins i, Fn *fn)
 	}
 	if (iscmp(i.op, &ck, &cc)) {
 		selcmp(i, ck, cc, fn);
+		return;
+	}
+	if (isvecop(i.op)) {
+		/* the vector ops (vec.c) have the classes their operands have: nothing to fix */
+		emiti(i);
 		return;
 	}
 	if (i.op != Onop) {

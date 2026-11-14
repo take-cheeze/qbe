@@ -1,7 +1,8 @@
 #!/bin/sh
 
-# The amd64 test suite with the 256-bit loop vectorizer on (qbe -V -Y): the loops that qualify
-# (int32 and float32, element-wise, see vec.c) use AVX2 ymm vectors. Needs an AVX2 host to run.
+# The test suite with the vector loop vectorizer on (qbe -V -Y): the loops that qualify (int32 and
+# float32, element-wise, see vec.c) use AVX2 ymm vectors on amd64 (needs an AVX2 host), and RVV
+# v registers on rv64 (run it with TARGET=rv64, under qemu-riscv64).
 
 dir=`dirname "$0"`
 tmp=`mktemp -d`

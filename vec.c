@@ -100,6 +100,7 @@ struct Loop {
 	int64_t unit;	/* the bytes per iteration of i (1 for an index) */
 	int vf;		/* lanes per vector */
 	int wide;	/* -Y: 256-bit vectors, 8 lanes of int32 or float32 (AVX2) */
+	int rvv;	/* -Y on rv64: four lanes of int32 or float32 in v registers (RVV) */
 	int nst;	/* stores */
 	uint nt;	/* fn->ntmp when the loop was found */
 	char *inl;	/* per temporary: defined in the loop */
@@ -734,6 +735,7 @@ findloop(Fn *fn, Blk *H, Loop *lp)
 	lp->n = cmp->arg[1];
 	lp->vf = 0;
 	lp->wide = 0;
+	lp->rvv = 0;
 	lp->nbref = 0;
 	lp->nacc = 0;
 	nt = fn->ntmp;
@@ -869,6 +871,10 @@ findloop(Fn *fn, Blk *H, Loop *lp)
 	lp->wide = vecavx && wideok() && !st.hasd && !st.conv && !lp->nred && !lp->hascond && !lp->anystrd && !lp->idata;
 	if (lp->wide)
 		lp->vf = 8;
+	/* rv64 (RVV): the same loops, four lanes; any other loop stays out (the rv64 emitter has no SSE forms) */
+	lp->rvv = vecavx && strcmp(T.name, "rv64") == 0 && !st.hasd && !st.conv && !lp->nred && !lp->hascond && !lp->anystrd && !lp->idata;
+	if (strcmp(T.name, "rv64") == 0 && !lp->rvv)
+		return rej(__LINE__);
 	lp->nst = st.nst;
 	for (t=Tmp0; t<nt; t++)
 		if (lp->lane[t] == LM)
@@ -951,6 +957,7 @@ findloop(Fn *fn, Blk *H, Loop *lp)
 static Ins *ib;
 static uint nib;
 static int vecw;	/* build: the loop being built is wide (lp->wide): its vector ops are the 256-bit ones */
+static int vecr;	/* build: the loop being built is an RVV one (lp->rvv): its vector ops are the generic ones */
 
 /* the targets with the 256-bit forms: the amd64 SysV ABI (and Apple's), whose xmm registers are all caller-saved */
 static int
@@ -998,7 +1005,7 @@ newvec(Fn *fn)
 
 	v = newtmp("vec", Kd, fn);
 	fn->tmp[v.val].vec = vecw ? 2 : 1;
-	if (vecw)
+	if (vecw || vecr)
 		fn->widevec = 1;
 	return v;
 }
@@ -1031,8 +1038,8 @@ mulw(Fn *fn, Ref a, Ref b)
 {
 	Ref t1, as, bs, t2, x, y, r;
 
-	if (vecw) {
-		/* 32-bit lanes: vpmulld */
+	if (vecw || vecr) {
+		/* 32-bit lanes: vpmulld (amd64) or vmul.vv (rv64) */
 		r = newvec(fn);
 		push(Ovecmulw, Kd, r, a, b);
 		return r;
@@ -2008,7 +2015,9 @@ vec(Fn *fn)
 	uint n, nc, k;
 	Loop lp;
 
-	if ((strcmp(T.name, "amd64_sysv") != 0 && strcmp(T.name, "arm64") != 0) || nofp)
+	int rvv = strcmp(T.name, "rv64") == 0;
+
+	if (nofp || (rvv ? !vecavx : (strcmp(T.name, "amd64_sysv") != 0 && strcmp(T.name, "arm64") != 0)))
 		return;
 	ib = vnew(0, sizeof ib[0], PHeap);
 	nib = 0;
@@ -2035,8 +2044,9 @@ vec(Fn *fn)
 					fn->name, cand[k]->id, lp.vf, lp.nbref, lp.nred,
 					lp.ptr ? ", pointer" : "", lp.hascond ? ", if" : "");
 			vecw = lp.wide;
+			vecr = lp.rvv;
 			build(fn, &lp);
-			vecw = 0;
+			vecw = vecr = 0;
 			fillcfg(fn);
 			filluse(fn);
 			if (debug['V'])
@@ -2055,8 +2065,8 @@ vec(Fn *fn)
 		free(lp.map);
 		free(lp.redof);
 	}
-	/* straight-line code, block by block (SLP) */
-	for (n=0; n<fn->nblk; n++) {
+	/* straight-line code, block by block (SLP; not on rv64 yet) */
+	for (n=0; n<fn->nblk && !rvv; n++) {
 		filluse(fn);
 		slpblock(fn, fn->rpo[n]);
 	}
