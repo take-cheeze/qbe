@@ -503,6 +503,12 @@ Emit:
 	case Ovecsubs256:
 	case Ovecmuls256:
 	case Ovecdivs256:
+	case Ovecceqw256:
+	case Ovecgtw256:
+	case Ovecandn256:
+	case Ovecfeqs256:
+	case Ovecflts256:
+	case Ovecfles256:
 	case Ovecfold256:
 		goto Emit;
 	case Ovecbcastw:

@@ -147,6 +147,12 @@ static struct {
 	{ Ovecsubs256, Kd, "vsubps %1, %0, %=" },
 	{ Ovecmuls256, Kd, "vmulps %1, %0, %=" },
 	{ Ovecdivs256, Kd, "vdivps %1, %0, %=" },
+	{ Ovecceqw256, Kd, "vpcmpeqd %1, %0, %=" },
+	{ Ovecgtw256, Kd, "vpcmpgtd %1, %0, %=" },
+	{ Ovecandn256, Kd, "vpandn %1, %0, %=" },
+	{ Ovecfeqs256, Kd, "vcmpps $0, %1, %0, %=" },
+	{ Ovecflts256, Kd, "vcmpps $1, %1, %0, %=" },
+	{ Ovecfles256, Kd, "vcmpps $2, %1, %0, %=" },
 	{ Ovecstore8, Ka, "movq %0, %M1" },
 	{ Ovecw2d, Kd, "cvtdq2pd %0, %=" },
 	{ Ovecd2w, Kd, "cvttpd2dq %0, %=" },
@@ -538,7 +544,7 @@ emitins(Ins i, E *e)
 	char *sym;
 
 	/* the 256-bit vector ops, and the copies of vectors in a function that has them (its slots are 32 bytes) */
-	wideins = (i.op >= Ovecbcasts256 && i.op <= Ovecdivs256)
+	wideins = (i.op >= Ovecbcasts256 && i.op <= Ovecfles256)
 		|| (i.op == Ocopy && i.cls == Kd && e->fn->widevec
 		    && (isreg(i.to) || rtype(i.to) == RSlot)
 		    && (isreg(i.arg[0]) || rtype(i.arg[0]) == RSlot));
