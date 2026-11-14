@@ -155,7 +155,7 @@ struct Stats {
 static int
 rej(int line)
 {
-	if (debug['V'])
+	if (debug['V'] || vecremarks)
 		fprintf(stderr, "vec: refused at vec.c:%d\n", line);
 	return 0;
 }
@@ -1632,9 +1632,10 @@ vec(Fn *fn)
 		if (debug['W'])
 			printfn(fn, stderr);	/* -d W: the IR the pass sees */
 		if (findloop(fn, cand[k], &lp)) {
-			if (debug['V'])
-				fprintf(stderr, "vec: %s: loop at @%d, %d lanes, %d bases, %d reductions\n", fn->name,
-					cand[k]->id, lp.vf, lp.nbref, lp.nred);
+			if (debug['V'] || vecremarks)
+				fprintf(stderr, "vec: %s: loop at @%d vectorized: %d lanes, %d bases, %d reductions%s%s\n",
+					fn->name, cand[k]->id, lp.vf, lp.nbref, lp.nred,
+					lp.ptr ? ", pointer" : "", lp.hascond ? ", if" : "");
 			build(fn, &lp);
 			fillcfg(fn);
 			filluse(fn);
