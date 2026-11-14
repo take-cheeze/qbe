@@ -487,6 +487,7 @@ extern int nounwind;   /* -U (nfcxx): no unwind tables (CFI), the kernel's -fno-
 extern int absaddr;    /* -A (nfcxx): global addresses are absolute immediates (gcc -mcmodel=kernel) */
 extern int pic;
 extern int vectorize;  /* -V (nfcxx): vectorize simple loops (vec.c; amd64_sysv, SSE) */
+extern int vecremarks;  /* -R (nfcxx): vectorizer remarks on stderr (vec.c) */
 extern int vecassoc;   /* -F: vectorize float reductions, which reassociates them (vec.c) */
 
 /* util.c */
