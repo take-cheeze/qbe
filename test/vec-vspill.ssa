@@ -1,0 +1,123 @@
+# 40 vector values live at once (a broadcast constant and an add each): more than the 32 vector registers, so vector values spill (-V -Y)
+
+export
+function w $vpress(l %a, l %c, w %n) {
+@start
+@head
+	%i =w phi @start 0, @latch %i2
+	%cc =w csltw %i, %n
+	jnz %cc, @body, @done
+@body
+	%t =l extsw %i
+	%o =l mul %t, 4
+	%pa =l add %a, %o
+	%x =w loadsw %pa
+	%y0 =w add %x, 3
+	%y1 =w add %x, 10
+	%y2 =w add %x, 17
+	%y3 =w add %x, 24
+	%y4 =w add %x, 31
+	%y5 =w add %x, 38
+	%y6 =w add %x, 45
+	%y7 =w add %x, 52
+	%y8 =w add %x, 59
+	%y9 =w add %x, 66
+	%y10 =w add %x, 73
+	%y11 =w add %x, 80
+	%y12 =w add %x, 87
+	%y13 =w add %x, 94
+	%y14 =w add %x, 101
+	%y15 =w add %x, 108
+	%y16 =w add %x, 115
+	%y17 =w add %x, 122
+	%y18 =w add %x, 129
+	%y19 =w add %x, 136
+	%y20 =w add %x, 143
+	%y21 =w add %x, 150
+	%y22 =w add %x, 157
+	%y23 =w add %x, 164
+	%y24 =w add %x, 171
+	%y25 =w add %x, 178
+	%y26 =w add %x, 185
+	%y27 =w add %x, 192
+	%y28 =w add %x, 199
+	%y29 =w add %x, 206
+	%y30 =w add %x, 213
+	%y31 =w add %x, 220
+	%y32 =w add %x, 227
+	%y33 =w add %x, 234
+	%y34 =w add %x, 241
+	%y35 =w add %x, 248
+	%y36 =w add %x, 255
+	%y37 =w add %x, 262
+	%y38 =w add %x, 269
+	%y39 =w add %x, 276
+	%s0 =w add %y0, %y1
+	%s1 =w add %s0, %y2
+	%s2 =w add %s1, %y3
+	%s3 =w add %s2, %y4
+	%s4 =w add %s3, %y5
+	%s5 =w add %s4, %y6
+	%s6 =w add %s5, %y7
+	%s7 =w add %s6, %y8
+	%s8 =w add %s7, %y9
+	%s9 =w add %s8, %y10
+	%s10 =w add %s9, %y11
+	%s11 =w add %s10, %y12
+	%s12 =w add %s11, %y13
+	%s13 =w add %s12, %y14
+	%s14 =w add %s13, %y15
+	%s15 =w add %s14, %y16
+	%s16 =w add %s15, %y17
+	%s17 =w add %s16, %y18
+	%s18 =w add %s17, %y19
+	%s19 =w add %s18, %y20
+	%s20 =w add %s19, %y21
+	%s21 =w add %s20, %y22
+	%s22 =w add %s21, %y23
+	%s23 =w add %s22, %y24
+	%s24 =w add %s23, %y25
+	%s25 =w add %s24, %y26
+	%s26 =w add %s25, %y27
+	%s27 =w add %s26, %y28
+	%s28 =w add %s27, %y29
+	%s29 =w add %s28, %y30
+	%s30 =w add %s29, %y31
+	%s31 =w add %s30, %y32
+	%s32 =w add %s31, %y33
+	%s33 =w add %s32, %y34
+	%s34 =w add %s33, %y35
+	%s35 =w add %s34, %y36
+	%s36 =w add %s35, %y37
+	%s37 =w add %s36, %y38
+	%s38 =w add %s37, %y39
+	%pc =l add %c, %o
+	storew %s38, %pc
+	jmp @latch
+@latch
+	%i2 =w add %i, 1
+	jmp @head
+@done
+	ret 0
+}
+
+# >>> driver
+# #include <stdio.h>
+# int vpress(int *, int *, int);
+# int A[80], C[40];
+# int main() {
+# 	int n, i, k, bad = 0;
+# 	for (n = 0; n <= 20; n++) {
+# 		for (i = 0; i < 80; i++) A[i] = i * 3 - 7;
+# 		for (i = 0; i < 40; i++) C[i] = -1;
+# 		vpress(A, C, n);
+# 		for (i = 0; i < 40; i++) {
+# 			int want = -1;
+# 			if (i < n) { want = 0; for (k = 0; k < 40; k++) want += A[i] + k * 7 + 3; }
+# 			if (C[i] != want) bad++;
+# 		}
+# 	}
+# 	printf(bad ? "FAILED\n" : "ok\n");
+# 	return bad != 0;
+# }
+# <<<
