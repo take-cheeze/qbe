@@ -79,6 +79,9 @@ struct Loop {
 	Ref i;		/* the induction temporary (ph->to) */
 	Ref lat;	/* the latch value i2 */
 	Ref n;		/* the bound */
+	int ivcls;	/* the class of i and the bound: Kw or Kl */
+	int cmpop;	/* the exit test: 0 lt, 1 le, 2 gt, 3 ge (signed) */
+	int64_t ivstep;	/* +1 for lt and le, -1 for gt and ge */
 	int vf;		/* lanes per vector */
 	int nst;	/* stores */
 	uint nt;	/* fn->ntmp when the loop was found */
@@ -132,14 +135,6 @@ conint(Fn *fn, Ref r, int64_t *v)
 		return 0;
 	*v = fn->con[r.val].bits.i;
 	return 1;
-}
-
-static int
-isone(Fn *fn, Ref r)
-{
-	int64_t v;
-
-	return conint(fn, r, &v) && v == 1;
 }
 
 static int
@@ -359,6 +354,36 @@ classify(Fn *fn, Loop *lp, Ins *ins, struct Stats *st)
 	return 1;
 }
 
+/* the signed compare of the exit test, its kind (see Loop.cmpop), or -1 */
+static int
+cmpkind(int op)
+{
+	switch (op) {
+	case Ocsltw: case Ocsltl: return 0;
+	case Ocslew: case Ocslel: return 1;
+	case Ocsgtw: case Ocsgtl: return 2;
+	case Ocsgew: case Ocsgel: return 3;
+	}
+	return -1;
+}
+
+/* the step of the latch value i2: +1 for i + 1, -1 for i - 1 or i - 1 as sub; 0 for anything else */
+static int64_t
+latchstep(Fn *fn, Loop *lp, Ins *ins)
+{
+	int64_t c;
+
+	if (ins->cls != lp->ivcls || !req(ins->arg[0], lp->i) || !conint(fn, ins->arg[1], &c))
+		return 0;
+	if (ins->op == Oadd && c == 1)
+		return 1;
+	if (ins->op == Oadd && c == -1)
+		return -1;
+	if (ins->op == Osub && c == 1)
+		return -1;
+	return 0;
+}
+
 /* find and check the loop headed by H; fills lp, true when H heads a loop to vectorize */
 static int
 findloop(Fn *fn, Blk *H, Loop *lp)
@@ -368,14 +393,15 @@ findloop(Fn *fn, Blk *H, Loop *lp)
 	Ins *cmp, *ins;
 	struct Stats st;
 	uint k, t, nt, nb, j;
-	int ia, found, nr;
+	int ia, found, nr, cmpop;
 	Use *u;
 
 	memset(&st, 0, sizeof st);
 	if (H->jmp.type != Jjnz || H->s1 == H || H->s2 == H || H->npred != 2 || H->nins != 1 || !H->phi)
 		return rej(__LINE__);
 	cmp = &H->ins[0];
-	if (cmp->op != Ocsltw || cmp->cls != Kw || !req(H->jmp.arg, cmp->to))
+	cmpop = cmpkind(cmp->op);
+	if (cmpop < 0 || (cmp->cls != Kw && cmp->cls != Kl) || !req(H->jmp.arg, cmp->to))
 		return rej(__LINE__);
 	if (fn->tmp[cmp->to.val].nuse != 1)
 		return rej(__LINE__);
@@ -388,7 +414,7 @@ findloop(Fn *fn, Blk *H, Loop *lp)
 	for (p=H->phi; p; p=p->link)
 		if (req(p->to, cmp->arg[0]))
 			ph = p;
-	if (!ph || ph->narg != 2 || ph->cls != Kw)
+	if (!ph || ph->narg != 2 || ph->cls != cmp->cls)
 		return rej(__LINE__);
 
 	/* the body chain: one predecessor each, no phi, a jmp; the last one jumps back to H */
@@ -426,6 +452,9 @@ findloop(Fn *fn, Blk *H, Loop *lp)
 	lp->ph = ph;
 	lp->ia = ia;
 	lp->i = ph->to;
+	lp->ivcls = cmp->cls;
+	lp->cmpop = cmpop;
+	lp->ivstep = cmpop <= 1 ? 1 : -1;
 	lp->lat = ph->arg[1-ia];
 	lp->n = cmp->arg[1];
 	lp->vf = 0;
@@ -484,7 +513,7 @@ findloop(Fn *fn, Blk *H, Loop *lp)
 		lp->redseen[k] = 0;
 	}
 	/* the bound is loop-invariant: the vector header tests it */
-	if (rtype(lp->n) == RTmp && (lp->inl[lp->n.val] || fn->tmp[lp->n.val].cls != Kw))
+	if (rtype(lp->n) == RTmp && (lp->inl[lp->n.val] || fn->tmp[lp->n.val].cls != lp->ivcls))
 		return rej(__LINE__);
 
 	/* the body */
@@ -494,8 +523,8 @@ findloop(Fn *fn, Blk *H, Loop *lp)
 		for (ins=b->ins; ins<&b->ins[b->nins]; ins++) {
 			if (ins->op == Onop || ins->op == Odbgloc)
 				continue;
-			if (ins->op == Oadd && ins->cls == Kw && req(ins->to, lp->lat)) {
-				if (!req(ins->arg[0], lp->i) || !isone(fn, ins->arg[1]))
+			if (req(ins->to, lp->lat)) {
+				if (latchstep(fn, lp, ins) != lp->ivstep)
 					return rej(__LINE__);
 				found = 1;
 				continue;
@@ -603,18 +632,63 @@ laneop(Fn *fn, Loop *lp, Ref r, int cls, int kind)
 	return v;
 }
 
-/* the overlap test of the stored bases with the others, over [base, base + n*size) */
+/* a long of an index or the bound: a constant (of class c), a long temporary, or a w one, extended */
 static Ref
-overlaps(Fn *fn, Loop *lp)
+asl(Fn *fn, Ref r, int c)
 {
-	Ref nl, s, x, lens, lenx, ends, endx, c1, c2, o, ov, sum;
+	Ref t;
+	int64_t v;
+
+	if (conint(fn, r, &v)) {
+		t = newtmp("vec", Kl, fn);
+		push(Ocopy, Kl, t, getcon(c == Kw ? (int32_t)v : v, fn), R);
+		return t;
+	}
+	if (fn->tmp[r.val].cls == Kl)
+		return r;
+	t = newtmp("vec", Kl, fn);
+	push(Oextsw, Kl, t, r, R);
+	return t;
+}
+
+/* the bytes [lo, hi) an array base is accessed in by the loop, a superset: from init to the bound */
+static void
+span(Fn *fn, Loop *lp, Ref base, int size, Ref il, Ref nl, Ref *lo, Ref *hi)
+{
+	Ref x, y, o1, o2, t;
+
+	if (lp->ivstep > 0) {
+		x = il;		/* init, then up to n */
+		y = nl;
+	} else {
+		x = nl;		/* n, then down to init */
+		y = il;
+	}
+	o1 = newtmp("vec", Kl, fn);
+	push(Omul, Kl, o1, x, getcon(size, fn));
+	*lo = newtmp("vec", Kl, fn);
+	push(Oadd, Kl, *lo, base, o1);
+	if (lp->ivstep > 0) {
+		t = y;
+	} else {
+		t = newtmp("vec", Kl, fn);
+		push(Oadd, Kl, t, y, getcon(1, fn));
+	}
+	o2 = newtmp("vec", Kl, fn);
+	push(Omul, Kl, o2, t, getcon(size, fn));
+	*hi = newtmp("vec", Kl, fn);
+	push(Oadd, Kl, *hi, base, o2);
+}
+
+/* the overlap test of the stored bases with the others: their spans are disjoint */
+static Ref
+overlaps(Fn *fn, Loop *lp, Ref init)
+{
+	Ref nl, il, s, x, los, his, lox, hix, c1, c2, o, ov, sum;
 	int a, b2;
 
-	nl = newtmp("vec", Kl, fn);
-	if (rtype(lp->n) == RCon)	/* a constant bound: its value as a long, not an extsw of a constant */
-		push(Ocopy, Kl, nl, getcon((int32_t)fn->con[lp->n.val].bits.i, fn), R);
-	else
-		push(Oextsw, Kl, nl, lp->n, R);
+	nl = asl(fn, lp->n, lp->ivcls);
+	il = asl(fn, init, lp->ivcls);
 	ov = R;
 	for (a=0; a<lp->nbref; a++) {
 		if (!lp->bst[a])
@@ -624,19 +698,13 @@ overlaps(Fn *fn, Loop *lp)
 				continue;
 			s = lp->bref[a];
 			x = lp->bref[b2];
-			lens = newtmp("vec", Kl, fn);
-			push(Omul, Kl, lens, nl, getcon(lp->bsz[a], fn));
-			ends = newtmp("vec", Kl, fn);
-			push(Oadd, Kl, ends, s, lens);
-			lenx = newtmp("vec", Kl, fn);
-			push(Omul, Kl, lenx, nl, getcon(lp->bsz[b2], fn));
-			endx = newtmp("vec", Kl, fn);
-			push(Oadd, Kl, endx, x, lenx);
-			/* [s, ends) and [x, endx) overlap when s < endx and x < ends */
+			span(fn, lp, s, lp->bsz[a], il, nl, &los, &his);
+			span(fn, lp, x, lp->bsz[b2], il, nl, &lox, &hix);
+			/* [los, his) and [lox, hix) overlap when los < hix and lox < his */
 			c1 = newtmp("vec", Kw, fn);
-			push(Ocsltl, Kl, c1, s, endx);
+			push(Ocsltl, Kl, c1, los, hix);
 			c2 = newtmp("vec", Kw, fn);
-			push(Ocsltl, Kl, c2, x, ends);
+			push(Ocsltl, Kl, c2, lox, his);
 			o = newtmp("vec", Kw, fn);
 			push(Oand, Kw, o, c1, c2);
 			if (req(ov, R))
@@ -656,7 +724,8 @@ build(Fn *fn, Loop *lp)
 {
 	Blk *Hv, *Bv, *Chk, *Rd, *P, *H, *b, *X;
 	Phi *ph, *p, *hp, *vp, *sp;
-	Ref iv, ivn, tt, cc, init, t, t2, e, c, a0, a1, ov, val;
+	Ref iv, ivn, tt, cc, vb, init, t, t2, e, c, a0, a1, ov, val;
+	int64_t delta;
 	Ins *ins;
 	uint k, j;
 	int a, kind, check, nred, rk;
@@ -672,10 +741,12 @@ build(Fn *fn, Loop *lp)
 	Bv = newblk();
 	Chk = check ? newblk() : 0;
 	Rd = nred ? newblk() : 0;
-	iv = newtmp("vec", Kw, fn);
-	ivn = newtmp("vec", Kw, fn);
-	tt = newtmp("vec", Kw, fn);
+	iv = newtmp("vec", lp->ivcls, fn);
+	ivn = newtmp("vec", lp->ivcls, fn);
+	tt = newtmp("vec", lp->ivcls, fn);
 	cc = newtmp("vec", Kw, fn);
+	/* the lowest index of the vector: iv when counting up, iv - (VF-1) when counting down */
+	vb = lp->ivstep > 0 ? iv : newtmp("vec", lp->ivcls, fn);
 	init = ph->arg[lp->ia];
 
 	/* the identity vector of each reduction, set up at P: 0, or all ones for and */
@@ -711,16 +782,18 @@ build(Fn *fn, Loop *lp)
 
 	/* the body, on the lanes: Bv */
 	memset(lp->map, 0, lp->nt * sizeof lp->map[0]);
-	lp->map[lp->i.val] = iv;
+	lp->map[lp->i.val] = vb;
 	for (k=0; k<(uint)nred; k++)
 		lp->map[lp->redph[k]->to.val] = lp->redva[k];
 	nib = 0;
+	if (!req(vb, iv))
+		push(Osub, lp->ivcls, vb, iv, getcon(lp->vf - 1, fn));
 	for (k=0; k<lp->nbody; k++) {
 		b = lp->body[k];
 		for (ins=b->ins; ins<&b->ins[b->nins]; ins++) {
 			if (ins->op == Onop || ins->op == Odbgloc)
 				continue;
-			if (ins->op == Oadd && ins->cls == Kw && req(ins->to, lp->lat))
+			if (req(ins->to, lp->lat))
 				continue;
 			/* a reduction's latch: the vector accumulator, folded with its lane */
 			if (rtype(ins->to) == RTmp && lp->redof[ins->to.val] < 0) {
@@ -763,7 +836,7 @@ build(Fn *fn, Loop *lp)
 		}
 	}
 	/* ivn = iv + VF; jmp Hv */
-	push(Oadd, Kw, ivn, iv, getcon(lp->vf, fn));
+	push(lp->ivstep > 0 ? Oadd : Osub, lp->ivcls, ivn, iv, getcon(lp->vf, fn));
 	idup(Bv, ib, nib);
 	Bv->jmp.type = Jjmp;
 	Bv->s1 = Hv;
@@ -821,7 +894,7 @@ build(Fn *fn, Loop *lp)
 	}
 
 	/* Hv: iv = phi(P or Chk: init, Bv: ivn); the accumulators */
-	hp = mkphi(iv, Kw, check ? Chk : P, init, Bv, ivn);
+	hp = mkphi(iv, lp->ivcls, check ? Chk : P, init, Bv, ivn);
 	Hv->phi = hp;
 	for (k=0; k<(uint)nred; k++) {
 		vp = mkphi(lp->redva[k], Kd, check ? Chk : P, lp->redvi[k], Bv, lp->redvn[k]);
@@ -838,7 +911,7 @@ build(Fn *fn, Loop *lp)
 
 	if (check) {
 		nib = 0;
-		ov = overlaps(fn, lp);
+		ov = overlaps(fn, lp, init);
 		idup(Chk, ib, nib);
 		Chk->jmp.type = Jjnz;
 		Chk->jmp.arg = ov;
@@ -848,8 +921,14 @@ build(Fn *fn, Loop *lp)
 
 	/* Hv: tt = iv + VF; cc = tt <= n; jnz cc, Bv, X */
 	nib = 0;
-	push(Oadd, Kw, tt, iv, getcon(lp->vf, fn));
-	push(Ocslew, Kw, cc, tt, lp->n);
+	/* the vector's lanes are in the loop when they all pass the exit test */
+	delta = lp->cmpop == 0 ? lp->vf : lp->cmpop == 1 ? lp->vf - 1
+		: lp->cmpop == 2 ? -lp->vf : -(lp->vf - 1);
+	push(Oadd, lp->ivcls, tt, iv, getcon(delta, fn));
+	if (lp->cmpop <= 1)
+		push(lp->ivcls == Kw ? Ocslew : Ocslel, lp->ivcls, cc, tt, lp->n);
+	else
+		push(lp->ivcls == Kw ? Ocsgew : Ocsgel, lp->ivcls, cc, tt, lp->n);
 	idup(Hv, ib, nib);
 	Hv->jmp.type = Jjnz;
 	Hv->jmp.arg = cc;
