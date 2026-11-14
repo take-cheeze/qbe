@@ -12,6 +12,7 @@ int vectorize;
 int vecassoc;
 int vecremarks;
 int vecavx;
+int veccost;
 static int code16;   /* -m16: i386 code run in real mode, as gcc -m16 makes it (.code16gcc) */
 char debug['Z'+1] = {
 	['P'] = 0, /* parsing */
@@ -152,7 +153,7 @@ main(int ac, char *av[])
 
 	T = Deftgt;
 	outf = stdout;
-	while ((c = getopt(ac, av, "hd:m:no:pt:UAVFRY")) != -1)
+	while ((c = getopt(ac, av, "hd:m:no:pt:UAVFRYC")) != -1)
 		switch (c) {
 		case 'd':
 			for (; *optarg; optarg++)
@@ -186,6 +187,9 @@ main(int ac, char *av[])
 		case 'Y':
 			vecavx = 1;
 			vectorize = 1;
+			break;
+		case 'C':
+			veccost = 1;
 			break;
 		case 'A':
 			absaddr = 1;
@@ -229,6 +233,8 @@ main(int ac, char *av[])
 			fprintf(hf, "\t%-11s vectorize simple loops (amd64_sysv, SSE; vec.c)\n", "-V");
 			fprintf(hf, "\t%-11s with -V: float reductions too (reassociates them)\n", "-F");
 			fprintf(hf, "\t%-11s with -V: remarks on each loop (vectorized, or refused and where)\n", "-R");
+			fprintf(hf, "\t%-11s with -V: 256-bit (AVX2) vectors, or RVV on rv64, for simple loops\n", "-Y");
+			fprintf(hf, "\t%-11s with -V: vectorize loops the cost model calls unprofitable too\n", "-C");
 			fprintf(hf, "\t%-11s i386 code for real mode (.code16gcc, gcc's -m16)\n", "-m16");
 			fprintf(hf, "\t%-11s position independent (for a shared object):\n", "-p");
 			fprintf(hf, "\t%-11s thread-local symbols by initial exec\n", "");
