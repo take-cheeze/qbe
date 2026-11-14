@@ -526,6 +526,10 @@ Emit:
 	case Ovecfeqd:
 	case Ovecfltd:
 	case Ovecfled:
+	case Ovecload8:
+	case Ovecstore8:
+	case Ovecw2d:
+	case Ovecd2w:
 		goto Emit;
 	case Ovecmuludq:
 	case Ovecsrlq32:

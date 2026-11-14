@@ -271,6 +271,10 @@ O(vecfles, T(e,e,e,d, e,e,e,d), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)   /* cmpps
 O(vecfeqd, T(e,e,e,d, e,e,e,d), F(0,0,0,1,0,0,0,0,0,0)) X(0,0,0) V(0)   /* cmppd eq */
 O(vecfltd, T(e,e,e,d, e,e,e,d), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)   /* cmppd lt */
 O(vecfled, T(e,e,e,d, e,e,e,d), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)   /* cmppd le */
+O(vecload8, T(e,e,e,m, e,e,e,e), F(0,0,0,0,0,0,0,0,0,1)) X(0,0,1) V(0)   /* movq: two w lanes (low 64 bits) */
+O(vecstore8, T(d,e,e,e, m,e,e,e), F(0,0,0,0,0,0,0,0,0,1)) X(0,0,1) V(0)  /* movq: the low 64 bits */
+O(vecw2d, T(e,e,e,d, e,e,e,e), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)     /* cvtdq2pd: two w lanes to two doubles */
+O(vecd2w, T(e,e,e,d, e,e,e,e), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)     /* cvttpd2dq: two doubles to two w lanes */
 O(vecmuludq, T(e,e,e,d, e,e,e,d), F(0,0,0,1,0,0,0,0,0,0)) X(0,0,0) V(0)   /* pmuludq: the products of the even lanes, 64-bit */
 O(vecsrlq32, T(e,e,e,d, e,e,e,e), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)   /* psrlq 32: each 64-bit lane shifted down */
 O(vecpack02, T(e,e,e,d, e,e,e,e), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,0) V(0)   /* pshufd 0x88: lanes 0 and 2 to the low half */
