@@ -868,7 +868,7 @@ findloop(Fn *fn, Blk *H, Loop *lp)
 	lp->vf = st.hasd ? 2 : 4;
 	/* -Y: 256-bit vectors (8 int32 or float32 lanes) for a loop of element-wise ops only: no double, conversion,
 	 * reduction, condition, mask, stride-2 access, or induction as data (the lane-index buffer is four lanes) */
-	lp->wide = vecavx && wideok() && !st.hasd && !st.conv && !lp->hascond && !lp->anystrd && !lp->idata;
+	lp->wide = vecavx && wideok() && !st.hasd && !st.conv && !lp->anystrd && !lp->idata;
 	if (lp->wide)
 		lp->vf = 8;
 	/* rv64 (RVV): the same loops, four lanes; any other loop stays out (the rv64 emitter has no SSE forms) */
@@ -985,6 +985,12 @@ wideop(int op)
 	case Ovecsubs:  return Ovecsubs256;
 	case Ovecmuls:  return Ovecmuls256;
 	case Ovecdivs:  return Ovecdivs256;
+	case Ovecceqw: return Ovecceqw256;
+	case Ovecgtw:  return Ovecgtw256;
+	case Ovecandn: return Ovecandn256;
+	case Ovecfeqs: return Ovecfeqs256;
+	case Ovecflts: return Ovecflts256;
+	case Ovecfles: return Ovecfles256;
 	}
 	return op;
 }
