@@ -120,6 +120,11 @@ static struct {
 	{ Ovecsrlq32, Kd, "-psrlq $32, %=" },
 	{ Ovecpack02, Kd, "pshufd $136, %0, %=" },
 	{ Ovecunpckl32, Kd, "-punpckldq %1, %=" },
+	{ Ovecunpckh32, Kd, "-punpckhdq %1, %=" },
+	{ Ovecshufe, Kd, "-shufps $136, %1, %=" },
+	{ Ovecshufo, Kd, "-shufps $221, %1, %=" },
+	{ Ovecunpcklpd, Kd, "-unpcklpd %1, %=" },
+	{ Ovecunpckhpd, Kd, "-unpckhpd %1, %=" },
 	{ Oload,    Ka, "mov%k %M0, %=" },
 	{ Oloadsw,  Kl, "movslq %M0, %L=" },
 	{ Oloadsw,  Kw, "movl %M0, %W=" },
@@ -520,6 +525,11 @@ emitins(Ins i, E *e)
 			|| (omap[o].cls == Ki && KBASE(i.cls) == 0)
 			|| (omap[o].cls == Ka))
 				break;
+		}
+		/* a two-address form whose result is the second source: copy that source aside first (xmm15) */
+		if (omap[o].fmt[0] == '-' && KBASE(i.cls) == 1 && req(i.to, i.arg[1]) && !req(i.arg[0], i.to)) {
+			emitf("movaps %1, %%xmm15", &i, e);
+			i.arg[1] = TMP(XMM0+15);
 		}
 		emitf(omap[o].fmt, &i, e);
 		break;

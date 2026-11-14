@@ -512,6 +512,11 @@ Emit:
 	case Ovecext3s:
 	case Ovecext0d:
 	case Ovecext1d:
+	case Ovecshufe:
+	case Ovecshufo:
+	case Ovecunpckh32:
+	case Ovecunpcklpd:
+	case Ovecunpckhpd:
 		goto Emit;
 	case Ovecmuludq:
 	case Ovecsrlq32:

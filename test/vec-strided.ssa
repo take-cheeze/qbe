@@ -1,0 +1,127 @@
+# Stride-2 accesses: a[2*i] read (two vector loads and a shuffle) and written (the even lanes merged
+# into two vectors, the odd lanes kept), for int, float and double elements.
+
+export
+function w $s2load(l %a, l %b, w %n) {
+@start
+@head
+	%i =w phi @start 0, @latch %i2
+	%c =w csltw %i, %n
+	jnz %c, @body, @done
+@body
+	%t =l extsw %i
+	%o =l mul %t, 8
+	%pa =l add %a, %o
+	%x =w loadsw %pa
+	%y =w add %x, 1
+	%ob =l mul %t, 4
+	%pb =l add %b, %ob
+	storew %y, %pb
+	jmp @latch
+@latch
+	%i2 =w add %i, 1
+	jmp @head
+@done
+	ret 0
+}
+
+export
+function w $s2store(l %a, l %b, w %n) {
+@start
+@head
+	%i =w phi @start 0, @latch %i2
+	%c =w csltw %i, %n
+	jnz %c, @body, @done
+@body
+	%t =l extsw %i
+	%ob =l mul %t, 4
+	%pb =l add %b, %ob
+	%x =w loadsw %pb
+	%y =w add %x, 3
+	%o =l mul %t, 8
+	%pa =l add %a, %o
+	storew %y, %pa
+	jmp @latch
+@latch
+	%i2 =w add %i, 1
+	jmp @head
+@done
+	ret 0
+}
+
+export
+function s $fs2(l %a, l %b, w %n) {
+@start
+@head
+	%i =w phi @start 0, @latch %i2
+	%c =w csltw %i, %n
+	jnz %c, @body, @done
+@body
+	%t =l extsw %i
+	%o =l mul %t, 8
+	%pa =l add %a, %o
+	%x =s loads %pa
+	%ob =l mul %t, 4
+	%pb =l add %b, %ob
+	stores %x, %pb
+	jmp @latch
+@latch
+	%i2 =w add %i, 1
+	jmp @head
+@done
+	ret
+}
+
+export
+function w $ds2(l %a, l %b, w %n) {
+@start
+@head
+	%i =w phi @start 0, @latch %i2
+	%c =w csltw %i, %n
+	jnz %c, @body, @done
+@body
+	%t =l extsw %i
+	%o =l mul %t, 16
+	%pa =l add %a, %o
+	%x =d loadd %pa
+	%ob =l mul %t, 8
+	%pb =l add %b, %ob
+	stored %x, %pb
+	jmp @latch
+@latch
+	%i2 =w add %i, 1
+	jmp @head
+@done
+	ret 0
+}
+
+# >>> driver
+# #include <stdio.h>
+# void s2load(int *, int *, int);
+# void s2store(int *, int *, int);
+# float fs2(float *, float *, int);
+# void ds2(double *, double *, int);
+# int A[80], B[80], R[80];
+# float FA[80], FB[80], FR[80];
+# double DA[80], DB[80], DR[80];
+# int main() {
+# 	int n, i, bad = 0;
+# 	for (n = 0; n <= 20; n++) {
+# 		for (i = 0; i < 80; i++) { A[i] = i * 5 - 40; B[i] = -1; }
+# 		s2load(A, B, n);
+# 		for (i = 0; i < 80; i++) { int want = i < n ? A[2 * i] + 1 : -1; if (B[i] != want) bad++; }
+# 		for (i = 0; i < 80; i++) { A[i] = i * 3 - 9; B[i] = i * 2 + 1; R[i] = A[i]; }
+# 		for (i = 0; i < n; i++) R[2 * i] = B[i] + 3;
+# 		s2store(A, B, n);
+# 		for (i = 0; i < 80; i++) if (A[i] != R[i]) bad++;
+# 		for (i = 0; i < 80; i++) { FA[i] = i * 0.5f; FB[i] = -7; }
+# 		fs2(FA, FB, n);
+# 		for (i = 0; i < 80; i++) { float want = i < n ? FA[2 * i] : -7; if (FB[i] != want) bad++; }
+# 		for (i = 0; i < 80; i++) { DA[i] = i * 0.25; DB[i] = -3; }
+# 		ds2(DA, DB, n);
+# 		for (i = 0; i < 80; i++) { double want = i < n ? DA[2 * i] : -3; if (DB[i] != want) bad++; }
+# 	}
+# 	printf("bad=%d\n", bad);
+# 	return bad != 0;
+# }
+# <<<

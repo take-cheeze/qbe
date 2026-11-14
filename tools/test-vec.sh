@@ -6,7 +6,7 @@
 dir=`dirname "$0"`
 tmp=`mktemp -d`
 w=$tmp/qbe-V
-printf '#!/bin/sh\nexec "%s/../qbe" -V "$@"\n' "`cd "$dir" && pwd`" > "$w"
+printf '#!/bin/sh\nexec "%s/../qbe" -V -F "$@"\n' "`cd "$dir" && pwd`" > "$w"
 chmod +x "$w"
 bin="$w" TARGET=x86_64 sh "$dir/test.sh" "$@"
 status=$?
