@@ -57,6 +57,7 @@ enum Token {
 	Tehpad,
 	Tehunwind,
 	Tehnoexc,
+	Tehspec,
 	Tret,
 	Thlt,
 	Texport,
@@ -122,6 +123,7 @@ static char *kwmap[Ntok] = {
 	[Tehpad] = "ehpad",
 	[Tehunwind] = "ehunwind",
 	[Tehnoexc] = "ehnoexcept",
+	[Tehspec] = "ehspec",
 	[Tret] = "ret",
 	[Thlt] = "hlt",
 	[Texport] = "export",
@@ -154,7 +156,7 @@ enum {
 	TMask = 16383, /* for temps hash */
 	BMask = 8191, /* for blocks hash */
 
-	K = 659164435, /* collision free for the keywords, with ehtype/ehpad/ehunwind/ehnoexcept (nfcxx) */
+	K = 1386979559, /* collision free for the keywords, with ehtype/ehpad/ehunwind/ehnoexcept/ehspec (nfcxx) */
 	M = 22,
 };
 
@@ -658,6 +660,8 @@ parseline(PState ps)
 	/* Exception tables (nfcxx; emit.c, all.h Blk.ehmode):
 	     ehtype ID $sym | ehtype ID 0   type ID (1-based) of the function's catch clauses: a typeinfo, 0 for catch (...)
 	     ehnoexcept                     an exception that leaves a call without a landing pad calls std::terminate
+	     ehspec ID...                   a dynamic exception specification (C++14 throw(T...)): the types it allows;
+	                                    every landing pad's action chain ends with its filter (a negative selector)
 	     ehpad CLEANUP ID...            this block is a landing pad: its catch clauses' type ids in order, and 1 when it
 	                                    also runs cleanups (it is entered even when no clause matches)
 	     ehunwind @pad | ehunwind 0     the calls of this block unwind to @pad, or call std::terminate (0) */
@@ -678,6 +682,21 @@ parseline(PState ps)
 			curf->ehty[i] = strf(PFn, "%s", tokval.str);
 		else if (t != Tint || tokval.num != 0)
 			err("typeinfo symbol or 0 expected");
+		curf->ehtab = 1;
+		expect(Tnl);
+		return PIns;
+	case Tehspec:
+		if (!curf->ehspec)
+			curf->ehspec = vnew(0, sizeof curf->ehspec[0], PFn);
+		while (peek() == Tint) {
+			next();
+			if (tokval.num < 1)
+				err("type id expected");
+			vgrow(&curf->ehspec, ++curf->nehspec);
+			curf->ehspec[curf->nehspec-1] = tokval.num;
+		}
+		if (!curf->nehspec)
+			err("type id expected");
 		curf->ehtab = 1;
 		expect(Tnl);
 		return PIns;
@@ -1074,6 +1093,9 @@ parsefn(Lnk *lnk)
 	curf->nehpad = 0;
 	if (curf->ehtab && curf->eh_lp)
 		err("@%s: eh.lp and exception table directives together", curf->name);
+	for (uint n=0; n<curf->nehspec; n++)
+		if ((uint)curf->ehspec[n] >= curf->nehty)
+			err("ehspec: unknown type id %d", curf->ehspec[n]);
 	for (b=curf->start; b; b=b->link) {
 		if (b->ehpad) {
 			vgrow(&curf->ehpads, ++curf->nehpad);
