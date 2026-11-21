@@ -513,6 +513,8 @@ split(Fn *fn, Blk *b)
 	bn->visit = ++b->visit;
 	bn->name = strf(PFn, "%s.%d", b->name, b->visit);
 	bn->loop = b->loop;
+	bn->ehlp = b->ehlp;   /* the second half's calls unwind where the block's did */
+	bn->ehmode = b->ehmode;
 	bn->link = b->link;
 	b->link = bn;
 	return bn;
@@ -744,7 +746,7 @@ amd64_sysv_abi(Fn *fn)
 
 	/* a static stack slot (alloc, also the copies of aggregate parameters that selpar made), a dynamic one, a varargs
 	   caller and a landing pad keep their calls */
-	nostack = !fn->dynalloc && !fn->vararg && !fn->eh_lp;
+	nostack = !fn->dynalloc && !fn->vararg && !fn->eh_lp && !fn->ehtab;  /* exception tables: no tail call */
 	for (b=fn->start; b; b=b->link)
 		for (i=b->ins; i<&b->ins[b->nins]; i++)
 			if (isalloc(i->op) || i->op == Ocall && returnstwice(fn, i))

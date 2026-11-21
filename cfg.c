@@ -129,6 +129,8 @@ fillrpo(Fn *f)
 	f->nblk = 0;
 	/* the landing pad first: the entry must keep the smallest RPO number, as the entry dominates every block (sdom) */
 	porec(f->eh_lp, &f->nblk);
+	for (uint k=0; k<f->nehpad; k++)
+		porec(f->ehpads[k], &f->nblk);
 	porec(f->start, &f->nblk);
 	vgrow(&f->rpo, f->nblk);
 	for (p=&f->start; (b=*p);) {
@@ -196,7 +198,7 @@ filldom(Fn *fn)
 			d = 0;
 			/* the landing pad (eh.lp) has no predecessors: the unwinder enters it. It uses only the entry block's values
 			 * (nfcxx), so the entry dominates it */
-			if (b == fn->eh_lp)
+			if (b == fn->eh_lp || b->ehpad)
 				d = fn->start;
 			for (p=0; p<b->npred; p++)
 				if (b->pred[p]->idom
@@ -525,6 +527,20 @@ jmpnophi(Jmp *j)
 	return 1;
 }
 
+/* the calls of b2 may join b1: they unwind to the same place (exception tables, Blk.ehmode) */
+static int
+ehsame(Blk *b1, Blk *b2)
+{
+	Ins *i;
+
+	if (b1->ehmode == b2->ehmode && b1->ehlp == b2->ehlp)
+		return 1;
+	for (i=b2->ins; i<&b2->ins[b2->nins]; i++)
+		if (i->op == Ocall)
+			return 0;
+	return 1;
+}
+
 /* require cfg rpo, breaks use */
 void
 simplcfg(Fn *fn)
@@ -577,7 +593,8 @@ simplcfg(Fn *fn)
 			j = &jmp[b->id];
 			/* a jtab block or a kept target (its table holds the pointer) is not merged into its predecessor */
 			if (j->type == Jjmp && j->s1->npred == 1
-			&& jmp[j->s1->id].type != Jjtab && !j->s1->keep) {
+			&& jmp[j->s1->id].type != Jjtab && !j->s1->keep
+			&& ehsame(b, j->s1)) {
 				assert(!j->s1->phi);
 				addbins(&b->ins, &b->nins, j->s1);
 				empty[b->id] &= empty[j->s1->id];
