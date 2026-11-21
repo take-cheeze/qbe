@@ -250,14 +250,20 @@ reloads(BSet *u, BSet *v)
  * slots at its entry, and their definitions store them there. The pads come first in the walk of spill() (fillrpo
  * numbers them last), so the slots exist before the definitions are seen. */
 static void
-padreload(BSet *v, BSet *w)
+padreload(BSet *v, BSet *w, Blk *b, Ins *lead)
 {
+	Ins *i;
 	uint j;
 
+	/* w: the temporaries the leading copies define (they are the pad's own, live from there on); the others are
+	 * live-ins */
 	bszero(w);
+	for (i=b->ins; i<lead; i++)
+		if (rtype(i->to) == RTmp && i->to.val >= Tmp0)
+			bsset(w, i->to.val);
 	reloads(v, w);
 	for (j=1; j<v->nt; j++)
-		v->t[j] = 0;
+		v->t[j] &= w->t[j];
 }
 
 static void
@@ -300,9 +306,11 @@ dopm(Blk *b, Ins *i, BSet *v)
 	do {
 		i--;
 		t = i->to.val;
-		if (!req(i->to, R))
-		if (bshas(v, t)) {
-			bsclr(v, t);
+		if (!req(i->to, R)) {
+			if (bshas(v, t))
+				bsclr(v, t);
+			/* a spilled destination (live in its slot, not in a register: a landing pad's ehptr that only a phi of
+			 * the shared pad code reads, nfcxx) is stored there too, as the other definitions are */
 			store(i->to, tmp[t].slot);
 		}
 		bsset(v, i->arg[0].val);
@@ -479,7 +487,7 @@ spill(Fn *fn)
 		for (i=&b->ins[b->nins]; i!=b->ins;) {
 			i--;
 			if (!reloaded && i < lead) {
-				padreload(v, w);
+				padreload(v, w, b, lead);
 				reloaded = 1;
 			}
 			if (regcpy(i)) {
@@ -555,7 +563,7 @@ spill(Fn *fn)
 				sethint(v, r);
 		}
 		if (!reloaded)
-			padreload(v, w);
+			padreload(v, w, b, lead);
 		if (b == fn->start)
 			assert(v->t[0] == (T.rglob | fn->reg));
 		else if (b->ehpad)
