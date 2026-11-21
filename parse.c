@@ -58,6 +58,7 @@ enum Token {
 	Tehunwind,
 	Tehnoexc,
 	Tehspec,
+	Tehnothrow,
 	Tret,
 	Thlt,
 	Texport,
@@ -124,6 +125,7 @@ static char *kwmap[Ntok] = {
 	[Tehunwind] = "ehunwind",
 	[Tehnoexc] = "ehnoexcept",
 	[Tehspec] = "ehspec",
+	[Tehnothrow] = "ehnothrow",
 	[Tret] = "ret",
 	[Thlt] = "hlt",
 	[Texport] = "export",
@@ -156,7 +158,7 @@ enum {
 	TMask = 16383, /* for temps hash */
 	BMask = 8191, /* for blocks hash */
 
-	K = 1386979559, /* collision free for the keywords, with ehtype/ehpad/ehunwind/ehnoexcept/ehspec (nfcxx) */
+	K = 1386979559, /* collision free for the keywords, with ehtype/ehpad/ehunwind/ehnoexcept/ehspec/ehnothrow (nfcxx) */
 	M = 22,
 };
 
@@ -664,7 +666,8 @@ parseline(PState ps)
 	                                    every landing pad's action chain ends with its filter (a negative selector)
 	     ehpad CLEANUP ID...            this block is a landing pad: its catch clauses' type ids in order, and 1 when it
 	                                    also runs cleanups (it is entered even when no clause matches)
-	     ehunwind @pad | ehunwind 0     the calls of this block unwind to @pad, or call std::terminate (0) */
+	     ehunwind @pad | ehunwind 0     the calls of this block unwind to @pad, or call std::terminate (0)
+	     ehnothrow $sym...              these callees let no exception out: their calls need no call site entry */
 	case Tehtype:
 		if (next() != Tint || tokval.num < 1)
 			err("type id expected");
@@ -698,6 +701,16 @@ parseline(PState ps)
 		if (!curf->nehspec)
 			err("type id expected");
 		curf->ehtab = 1;
+		expect(Tnl);
+		return PIns;
+	case Tehnothrow:
+		if (!curf->ehnothrow)
+			curf->ehnothrow = vnew(0, sizeof curf->ehnothrow[0], PFn);
+		while (peek() == Tglo) {
+			next();
+			vgrow(&curf->ehnothrow, ++curf->nehnothrow);
+			curf->ehnothrow[curf->nehnothrow-1] = intern(tokval.str);
+		}
 		expect(Tnl);
 		return PIns;
 	case Tehnoexc:

@@ -1024,10 +1024,10 @@ amd64_sysv_emitfn(Fn *fn, FILE *f)
 			if (i == last)
 				break;
 			if (i->op == Ocall)
-				ehcsbegin(fn, b, f);
+				ehcsbegin(fn, b, i, f);
 			emitins(*i, e);
 			if (i->op == Ocall)
-				ehcsend(fn, b, f);
+				ehcsend(fn, b, i, f);
 		}
 		lbl = 1;
 		switch (b->jmp.type) {

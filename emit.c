@@ -72,7 +72,11 @@ emitfnlnk(char *n, Lnk *l, FILE *f)
    function (EhDefault) is a call site with no pad; a call that terminates (EhTerm, or EhDefault in an ehnoexcept
    function) has no call site, and the personality calls std::terminate when an exception leaves it. */
 static uint ehnext, ehcur, ehcs;   /* numbers of the functions with a pad, of the current one, and of its call sites */
-static uint *ehcsv;                /* the current function's call sites */
+static uint *ehcsv;                /* the current function's call sites: the label number of each one's start */
+static uint *ehcsve;               /* and of its end: a site merges the calls after it with the same pad */
+static uint ehcscur;               /* the label number of the call being emitted */
+static int ehcsbrk;
+static int ehcsskip;               /* the call being emitted is of a nothrow callee (ehnothrowcall) */                /* a call with no call site came since the last one: the next does not merge */
 static Blk **ehcslp;               /* exception tables: the landing pad of each call site (0: none) */
 static uint nehcsv, ehcsvcap;
 static int ehtabon;                /* the current function has exception tables (an LSDA) */
@@ -94,6 +98,7 @@ ehfnbegin(Fn *fn, FILE *f)
 		die("landing pads need ELF unwind tables (no Apple target)");
 	ehcur = ++ehnext;
 	nehcsv = 0;
+	ehcsbrk = 0;
 	ehtabon = !fn->eh_lp;
 	fprintf(f,
 		".LEHfs%u:\n"
@@ -132,46 +137,87 @@ ehcallpad(Fn *fn, Blk *b, int *none)
 	}
 }
 
+/* a direct call of a callee the function lists with ehnothrow: no exception leaves it, so it needs no call site
+   entry, and it may sit inside the range of any (as gcc's calls of nothrow functions do) */
+static int
+ehnothrowcall(Fn *fn, Ins *i)
+{
+	Con *c;
+	uint k;
+
+	if (!fn->nehnothrow || rtype(i->arg[0]) != RCon)
+		return 0;
+	c = &fn->con[i->arg[0].val];
+	if (c->type != CAddr || c->bits.i != 0)
+		return 0;
+	for (k=0; k<fn->nehnothrow; k++)
+		if (fn->ehnothrow[k] == c->sym.id)
+			return 1;
+	return 0;
+}
+
 /* a call of the function, outside its landing pad: its address range is a call site of the LSDA */
 void
-ehcsbegin(Fn *fn, Blk *b, FILE *f)
+ehcsbegin(Fn *fn, Blk *b, Ins *i, FILE *f)
 {
 	Blk *lp;
 	int none;
 
+	ehcsskip = ehnothrowcall(fn, i);
+	if (ehcsskip)
+		return;
 	if (ehtabon) {
 		lp = ehcallpad(fn, b, &none);
-		if (none)
+		if (none) {
+			ehcsbrk = 1;
 			return;
+		}
 	} else {
-		if (!fn->eh_lp || b == fn->eh_lp)
+		if (!fn->eh_lp)
 			return;
+		if (b == fn->eh_lp) {
+			ehcsbrk = 1;
+			return;
+		}
 		lp = 0;
 	}
+	ehcscur = ++ehcs;
+	/* as gcc does, a call with the pad of the call site before it, and no call without a site between them, extends
+	   that site: the instructions between two calls throw nothing */
+	if (nehcsv && !ehcsbrk && ehcslp[nehcsv-1] == lp) {
+		ehcsve[nehcsv-1] = ehcscur;
+		return;
+	}
+	ehcsbrk = 0;
 	if (nehcsv == ehcsvcap) {
 		ehcsvcap = ehcsvcap ? 2 * ehcsvcap : 16;
 		ehcsv = realloc(ehcsv, ehcsvcap * sizeof ehcsv[0]);
+		ehcsve = realloc(ehcsve, ehcsvcap * sizeof ehcsve[0]);
 		ehcslp = realloc(ehcslp, ehcsvcap * sizeof ehcslp[0]);
-		if (!ehcsv || !ehcslp)
+		if (!ehcsv || !ehcsve || !ehcslp)
 			die("out of memory");
 	}
 	ehcslp[nehcsv] = lp;
-	ehcsv[nehcsv++] = ++ehcs;
-	fprintf(f, ".LEHcsb%u:\n", ehcs);
+	ehcsve[nehcsv] = ehcscur;
+	ehcsv[nehcsv++] = ehcscur;
+	fprintf(f, ".LEHcsb%u:\n", ehcscur);
 }
 
 void
-ehcsend(Fn *fn, Blk *b, FILE *f)
+ehcsend(Fn *fn, Blk *b, Ins *i, FILE *f)
 {
 	int none;
 
+	(void)i;
+	if (ehcsskip)
+		return;
 	if (ehtabon) {
 		ehcallpad(fn, b, &none);
 		if (none)
 			return;
 	} else if (!fn->eh_lp || b == fn->eh_lp)
 		return;
-	fprintf(f, ".LEHcse%u:\n", ehcsv[nehcsv-1]);
+	fprintf(f, ".LEHcse%u:\n", ehcscur);
 }
 
 /* DW.ref.NAME: an indirection the LSDA and the CIE reach PC-relatively (as gcc does), once per file */
@@ -243,7 +289,7 @@ ehtabend(Fn *fn, FILE *f)
 		fprintf(f,
 			"\t.uleb128 .LEHcsb%u-.LEHfs%u\n"
 			"\t.uleb128 .LEHcse%u-.LEHcsb%u\n",
-			c, ehcur, c, c
+			c, ehcur, ehcsve[k], c
 		);
 		if (!lp)
 			fputs("\t.uleb128 0\n\t.uleb128 0\n", f);
@@ -328,7 +374,7 @@ ehfnend(Fn *fn, FILE *f)
 			"\t.uleb128 .LEHcse%u-.LEHcsb%u\n"
 			"\t.uleb128 .LEHlp%u-.LEHfs%u\n"
 			"\t.uleb128 0\n",
-			c, ehcur, c, c, ehcur, ehcur
+			c, ehcur, ehcsve[k], c, ehcur, ehcur
 		);
 	}
 	fprintf(f, ".LEHCTe%u:\n\t.text\n", ehcur);
