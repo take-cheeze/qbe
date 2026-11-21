@@ -549,6 +549,7 @@ void igroup(Blk *, Ins *, Ins **, Ins **);
 void emit(int, int, Ref, Ref, Ref);
 void emiti(Ins);
 void idup(Blk *, Ins *, ulong);
+void ehhoist(Fn *);
 Ins *icpy(Ins *, Ins *, ulong);
 int cmpop(int);
 int cmpwlneg(int);

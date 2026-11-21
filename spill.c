@@ -245,6 +245,21 @@ reloads(BSet *u, BSet *v)
 			emit(tmp[t].vec == 2 ? Ovecload256 : tmp[t].vec ? Ovecload : Oload, tmp[t].cls, TMP(t), slot(t), R);
 }
 
+/* exception tables (nfcxx): no register survives the unwind into a landing pad (the unwinder restores only the
+ * callee-saved ones, and only those the call's frame saved); the temporaries live into it are loaded from their
+ * slots at its entry, and their definitions store them there. The pads come first in the walk of spill() (fillrpo
+ * numbers them last), so the slots exist before the definitions are seen. */
+static void
+padreload(BSet *v, BSet *w)
+{
+	uint j;
+
+	bszero(w);
+	reloads(v, w);
+	for (j=1; j<v->nt; j++)
+		v->t[j] = 0;
+}
+
 static void
 store(Ref r, int s)
 {
@@ -340,10 +355,10 @@ void
 spill(Fn *fn)
 {
 	Blk *b, *s1, *s2, *hd, **bp;
-	int j, l, t, k, lvarg[2];
+	int j, l, t, k, lvarg[2], reloaded;
 	uint n;
 	BSet u[1], v[1], w[1];
-	Ins *i;
+	Ins *i, *lead;
 	Phi *p;
 	Mem *m;
 	bits r;
@@ -430,6 +445,10 @@ spill(Fn *fn)
 			limit2(v, 0, 0, w);
 		} else {
 			bscopy(v, b->out);
+			/* exception tables (nfcxx): a block without successors whose calls unwind to a pad has the pad's live-ins
+			 * in its out set; the pad loads them from their slots (below), so they need no register here */
+			if (b->ehmode == EhPad)
+				limit2(v, 0, 0, NULL);
 			if (rtype(b->jmp.arg) == RCall)
 				v->t[0] |= T.retregs(b->jmp.arg, 0);
 		}
@@ -450,8 +469,19 @@ spill(Fn *fn)
 
 		/* 2. process the block instructions */
 		curi = &insb[NIns];
+		/* a landing pad: its leading copies of the unwinder's registers (ehptr, ehsel) come first; the reloads of
+		 * its live-in temporaries go right after them (padreload, below) */
+		lead = b->ins;
+		if (b->ehpad)
+			while (lead < &b->ins[b->nins] && regcpy(lead))
+				lead++;
+		reloaded = !b->ehpad;
 		for (i=&b->ins[b->nins]; i!=b->ins;) {
 			i--;
+			if (!reloaded && i < lead) {
+				padreload(v, w);
+				reloaded = 1;
+			}
 			if (regcpy(i)) {
 				i = dopm(b, i, v);
 				continue;
@@ -524,8 +554,12 @@ spill(Fn *fn)
 			if (r)
 				sethint(v, r);
 		}
+		if (!reloaded)
+			padreload(v, w);
 		if (b == fn->start)
 			assert(v->t[0] == (T.rglob | fn->reg));
+		else if (b->ehpad)
+			assert((v->t[0] & T.rglob) == T.rglob);   /* and the unwinder's registers its leading copies read */
 		else
 			assert(v->t[0] == T.rglob);
 

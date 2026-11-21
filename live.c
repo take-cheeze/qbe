@@ -89,6 +89,8 @@ Again:
 		/* exception tables: a call of b can leave for the landing pad b->ehlp */
 		if (b->ehmode == EhPad && blkhascall(b)) {
 			liveon(v, b, b->ehlp);
+			/* the registers the pad reads first (ehptr, ehsel) are the unwinder's, not live across the calls */
+			v->t[0] &= T.rglob;
 			bsunion(b->out, v);
 		}
 		chg |= !bsequal(b->out, u);

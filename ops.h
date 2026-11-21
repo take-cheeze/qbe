@@ -138,6 +138,11 @@ O(vastart, T(m,e,e,e, x,e,e,e), F(0,0,0,0,0,0,0,0,0,1)) X(0,0,0) V(0)
 
 O(copy,    T(w,l,s,d, x,x,x,x), F(0,0,0,0,0,0,0,0,0,0)) X(0,0,1) V(0)
 
+/* Exception tables (nfcxx): in a landing pad (ehpad), the exception and the selector the personality installed (the
+   registers of __builtin_eh_return_data_regno(0) and (1)); the abi pass makes them copies of those registers */
+O(ehptr,   T(e,x,e,e, e,x,e,e), F(0,0,0,0,0,0,0,0,0,1)) X(0,0,0) V(0)
+O(ehsel,   T(e,x,e,e, e,x,e,e), F(0,0,0,0,0,0,0,0,0,1)) X(0,0,0) V(0)
+
 /* Debug */
 O(dbgloc,  T(w,e,e,e, w,e,e,e), F(0,0,0,0,0,0,0,0,0,1)) X(0,0,1) V(0)
 

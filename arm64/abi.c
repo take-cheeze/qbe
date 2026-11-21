@@ -788,6 +788,7 @@ arm64_abi(Fn *fn)
 	int n0, n1, ioff;
 	Params p;
 
+	ehhoist(fn);
 	for (b=fn->start; b; b=b->link)
 		b->visit = 0;
 
@@ -831,6 +832,13 @@ arm64_abi(Fn *fn)
 					apple_selvastart(fn, p, i->arg[0]);
 				else
 					arm64_selvastart(fn, p, i->arg[0]);
+				break;
+			case Oehptr:
+			case Oehsel:
+				/* a landing pad's exception and selector: x0 and x1, as the personality installed them */
+				if (!b->ehpad)
+					err("%s outside a landing pad", optab[i->op].name);
+				emit(Ocopy, Kl, i->to, TMP(i->op == Oehptr ? R0 : R0 + 1), R);
 				break;
 			case Ovaarg:
 				if (T.apple)
