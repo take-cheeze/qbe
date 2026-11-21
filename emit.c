@@ -80,7 +80,7 @@ static int ehtabon;                /* the current function has exception tables 
 static int
 ehneedtab(Fn *fn)
 {
-	return fn->ehtab && (fn->nehpad || fn->ehnoexc);
+	return fn->ehtab && (fn->nehpad || fn->ehnoexc || fn->nehspec);
 }
 
 void
@@ -214,7 +214,7 @@ ehtabend(Fn *fn, FILE *f)
 	Blk *lp;
 	int types;
 
-	types = fn->nehty > 1;
+	types = fn->nehty > 1 || fn->nehspec;
 	fprintf(f,
 		"\t.section .gcc_except_table,\"a\",@progbits\n"
 		"\t.p2align 2\n"
@@ -247,7 +247,7 @@ ehtabend(Fn *fn, FILE *f)
 		);
 		if (!lp)
 			fputs("\t.uleb128 0\n\t.uleb128 0\n", f);
-		else if (!lp->nehact)
+		else if (!lp->nehact && !fn->nehspec)
 			fprintf(f, "\t.uleb128 .LEHp%u_%u-.LEHfs%u\n\t.uleb128 0\n", ehcur, lp->id, ehcur);
 		else
 			fprintf(f,
@@ -261,13 +261,16 @@ ehtabend(Fn *fn, FILE *f)
 	fprintf(f, ".LEHCTe%u:\n.LEHAT%u:\n", ehcur, ehcur);
 	for (k=0; k<fn->nehpad; k++) {
 		lp = fn->ehpads[k];
-		if (!lp->nehact)
+		if (!lp->nehact && !fn->nehspec)
 			continue;
 		fprintf(f, ".LEHA%u_%u:\n", ehcur, lp->id);
 		for (t=0; t<lp->nehact; t++) {
 			fprintf(f, "\t.sleb128 %d\n", lp->ehact[t]);
-			fprintf(f, "\t.sleb128 %d\n", t+1 < lp->nehact || lp->ehclean ? 1 : 0);
+			fprintf(f, "\t.sleb128 %d\n", t+1 < lp->nehact || lp->ehclean || fn->nehspec ? 1 : 0);
 		}
+		/* the dynamic exception specification: filter -1 (its list at offset 0 after .LEHTT) */
+		if (fn->nehspec)
+			fprintf(f, "\t.sleb128 -1\n\t.sleb128 %d\n", lp->ehclean ? 1 : 0);
 		if (lp->ehclean)
 			fputs("\t.sleb128 0\n\t.sleb128 0\n", f);
 	}
@@ -280,6 +283,12 @@ ehtabend(Fn *fn, FILE *f)
 			else
 				fputs("\t.long 0\n", f);
 		fprintf(f, ".LEHTT%u:\n", ehcur);
+		/* the exception specification list: its type ids, 0 at the end */
+		if (fn->nehspec) {
+			for (t=0; t<fn->nehspec; t++)
+				fprintf(f, "\t.uleb128 %d\n", fn->ehspec[t]);
+			fputs("\t.uleb128 0\n", f);
+		}
 	}
 	fputs("\t.text\n", f);
 	ehdwref("__nfcxx_personality_v0", f);

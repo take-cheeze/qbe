@@ -266,6 +266,12 @@ dedupins(Fn *fn, Blk *b, Ins *i)
 	}
 	i1 = gvndup(i, 1);
 	if (i1) {
+		/* exception tables (nfcxx): a landing pad is entered from inside a call, along no edge, so no
+		 * value of the body may be live into it; GCM would put a value shared by the body and the pad
+		 * code where both see it. Such a function only merges into a dominating instruction. */
+		if (fn->nehpad && rtype(i1->to) == RTmp
+		&& !dom(fn->rpo[fn->tmp[i1->to.val].bid], b))
+			return;
 		killins(fn, i, i1->to);
 		return;
 	}

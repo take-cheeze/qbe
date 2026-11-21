@@ -434,6 +434,8 @@ struct Fn {
 	char ehtab;
 	char ehnoexc;
 	char **ehty;
+	int *ehspec;  /* nfcxx: the type ids of a dynamic exception specification (ehspec) */
+	uint nehspec;
 	uint nehty;
 	Blk **ehpads;
 	uint nehpad;
