@@ -14,6 +14,11 @@ promote(Fn *fn)
 	Use *u, *ue;
 	int s, k;
 
+	/* exception tables (nfcxx): a landing pad reads stack slots that no CFG edge reaches it with, so they stay
+	   in memory and are not shared */
+	if (fn->nehpad)
+		return;
+
 	/* promote uniform stack slots to temporaries */
 	b = fn->start;
 	for (i=b->ins; i<&b->ins[b->nins]; i++) {
@@ -221,6 +226,11 @@ coalesce(Fn *fn)
 	int64_t off0, off1;
 	int n, m, ip, sz, nsl, nbl, *stk;
 	uint total, freed, fused;
+
+	/* exception tables (nfcxx): a landing pad reads stack slots that no CFG edge reaches it with, so they stay
+	   in memory and are not shared */
+	if (fn->nehpad)
+		return;
 
 	/* minimize the stack usage
 	 * by coalescing slots

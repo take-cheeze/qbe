@@ -86,6 +86,11 @@ Again:
 			liveon(v, b, f->eh_lp);
 			bsunion(b->out, v);
 		}
+		/* exception tables: a call of b can leave for the landing pad b->ehlp */
+		if (b->ehmode == EhPad && blkhascall(b)) {
+			liveon(v, b, b->ehlp);
+			bsunion(b->out, v);
+		}
 		chg |= !bsequal(b->out, u);
 
 		memset(nlv, 0, sizeof nlv);

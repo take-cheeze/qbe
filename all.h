@@ -284,6 +284,23 @@ struct Blk {
 	int nlive[2];
 	int loop;
 	char *name;
+	/* Exception tables (nfcxx, the ehtype/ehpad/ehunwind directives; emit.c). ehmode says where an exception thrown
+	   by a call of this block goes: EhDefault (the function's default: through it, or std::terminate when it is
+	   ehnoexcept), EhPad (to the landing pad ehlp), EhTerm (std::terminate: no call site entry). A landing pad
+	   (ehpad) is entered by the unwinder; ehact are the type ids of its catch clauses, in order, and ehclean says
+	   that it also runs cleanups (the pad is entered even when no clause matches). */
+	Blk *ehlp;
+	char ehmode;
+	char ehpad;
+	char ehclean;
+	int *ehact;
+	uint nehact;
+};
+
+enum {
+	EhDefault,
+	EhPad,
+	EhTerm,
 };
 
 struct Use {
@@ -411,6 +428,15 @@ struct Fn {
 	int widevec;	/* vec.c: a 256-bit vector (Tmp.vec 2) is in use: the Kd slots are 32 bytes */
 	Blk *start;
 	Blk *eh_lp;  /* the landing pad (a block labeled eh.lp): unwound calls of the function enter it */
+	/* exception tables (nfcxx; Blk.ehmode): ehtab says the function uses them (an ehtype, ehpad, ehunwind or
+	   ehnoexcept directive); ehty[id] is the typeinfo symbol of type id (1-based), 0 for a catch-all clause;
+	   ehnoexc makes an exception that leaves a call without a landing pad call std::terminate */
+	char ehtab;
+	char ehnoexc;
+	char **ehty;
+	uint nehty;
+	Blk **ehpads;
+	uint nehpad;
 	Tmp *tmp;
 	Con *con;
 	Mem *mem;

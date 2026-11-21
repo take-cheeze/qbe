@@ -61,47 +61,100 @@ emitfnlnk(char *n, Lnk *l, FILE *f)
 /* Landing pads (fn->eh_lp, the block labeled eh.lp; live.c). The system unwinder enters the pad at a call of the function
    that a throw unwinds, and the pad resumes the unwind (cproc's cleanup lowering, nfcxx). The call sites and their pad are
    in the function's LSDA (.gcc_except_table), which the personality reads: gcc's __gcc_personality_v0, which with no
-   catch types treats a call site with action 0 as a cleanup. The landing pads use DW_EH_PE_* offsets from the function. */
+   catch types treats a call site with action 0 as a cleanup. The landing pads use DW_EH_PE_* offsets from the function.
+
+   Exception tables (nfcxx, fn->ehtab: the ehtype/ehpad/ehunwind/ehnoexcept directives, all.h Blk.ehmode): several
+   landing pads, catch clauses and std::terminate, in the Itanium C++ ABI's LSDA. The personality is
+   __nfcxx_personality_v0 (nfcxx's Path B runtime), which calls libstdc++'s __gxx_personality_v0 and keeps the exception
+   and the selector it gives a landing pad, where the pad's code reads them (__nfcxx_eh_ptr, __nfcxx_eh_sel): QBE has no
+   way to read the registers the personality sets. A call of a block with a pad (EhPad) is a call site with that pad and
+   the pad's actions (its catch clauses' type ids, then a cleanup when ehclean); a call that unwinds through the
+   function (EhDefault) is a call site with no pad; a call that terminates (EhTerm, or EhDefault in an ehnoexcept
+   function) has no call site, and the personality calls std::terminate when an exception leaves it. */
 static uint ehnext, ehcur, ehcs;   /* numbers of the functions with a pad, of the current one, and of its call sites */
 static uint *ehcsv;                /* the current function's call sites */
+static Blk **ehcslp;               /* exception tables: the landing pad of each call site (0: none) */
 static uint nehcsv, ehcsvcap;
+static int ehtabon;                /* the current function has exception tables (an LSDA) */
+
+static int
+ehneedtab(Fn *fn)
+{
+	return fn->ehtab && (fn->nehpad || fn->ehnoexc);
+}
 
 void
 ehfnbegin(Fn *fn, FILE *f)
 {
-	if (!fn->eh_lp)
+	ehtabon = 0;
+	if (!fn->eh_lp && !ehneedtab(fn))
 		return;
 	if (T.apple)
 		die("landing pads need ELF unwind tables (no Apple target)");
 	ehcur = ++ehnext;
 	nehcsv = 0;
+	ehtabon = !fn->eh_lp;
 	fprintf(f,
 		".LEHfs%u:\n"
-		"\t.cfi_personality 0x9b, DW.ref.__gcc_personality_v0\n"
+		"\t.cfi_personality 0x9b, DW.ref.%s\n"
 		"\t.cfi_lsda 0x1b, .LEHL%u\n",
-		ehcur, ehcur
+		ehcur, ehtabon ? "__nfcxx_personality_v0" : "__gcc_personality_v0", ehcur
 	);
 }
 
 void
 ehlpbegin(Fn *fn, Blk *b, FILE *f)
 {
+	if (ehtabon) {
+		if (b->ehpad)
+			fprintf(f, ".LEHp%u_%u:\n", ehcur, b->id);
+		return;
+	}
 	if (b == fn->eh_lp)
 		fprintf(f, ".LEHlp%u:\n", ehcur);
+}
+
+/* the landing pad of a call of b (exception tables), or -1 when the call has no call site entry */
+static Blk *
+ehcallpad(Fn *fn, Blk *b, int *none)
+{
+	*none = 0;
+	switch (b->ehmode) {
+	case EhPad:
+		return b->ehlp;
+	case EhTerm:
+		*none = 1;
+		return 0;
+	default:
+		*none = fn->ehnoexc;
+		return 0;
+	}
 }
 
 /* a call of the function, outside its landing pad: its address range is a call site of the LSDA */
 void
 ehcsbegin(Fn *fn, Blk *b, FILE *f)
 {
-	if (!fn->eh_lp || b == fn->eh_lp)
-		return;
+	Blk *lp;
+	int none;
+
+	if (ehtabon) {
+		lp = ehcallpad(fn, b, &none);
+		if (none)
+			return;
+	} else {
+		if (!fn->eh_lp || b == fn->eh_lp)
+			return;
+		lp = 0;
+	}
 	if (nehcsv == ehcsvcap) {
 		ehcsvcap = ehcsvcap ? 2 * ehcsvcap : 16;
 		ehcsv = realloc(ehcsv, ehcsvcap * sizeof ehcsv[0]);
-		if (!ehcsv)
+		ehcslp = realloc(ehcslp, ehcsvcap * sizeof ehcslp[0]);
+		if (!ehcsv || !ehcslp)
 			die("out of memory");
 	}
+	ehcslp[nehcsv] = lp;
 	ehcsv[nehcsv++] = ++ehcs;
 	fprintf(f, ".LEHcsb%u:\n", ehcs);
 }
@@ -109,9 +162,125 @@ ehcsbegin(Fn *fn, Blk *b, FILE *f)
 void
 ehcsend(Fn *fn, Blk *b, FILE *f)
 {
-	if (!fn->eh_lp || b == fn->eh_lp)
+	int none;
+
+	if (ehtabon) {
+		ehcallpad(fn, b, &none);
+		if (none)
+			return;
+	} else if (!fn->eh_lp || b == fn->eh_lp)
 		return;
 	fprintf(f, ".LEHcse%u:\n", ehcsv[nehcsv-1]);
+}
+
+/* DW.ref.NAME: an indirection the LSDA and the CIE reach PC-relatively (as gcc does), once per file */
+static void
+ehdwref(char *name, FILE *f)
+{
+	static char **done;
+	static uint ndone;
+	uint k;
+
+	for (k=0; k<ndone; k++)
+		if (strcmp(done[k], name) == 0)
+			return;
+	done = realloc(done, (ndone + 1) * sizeof done[0]);
+	if (!done)
+		die("out of memory");
+	done[ndone++] = name;
+	fprintf(f,
+		"\t.hidden DW.ref.%s\n"
+		"\t.weak DW.ref.%s\n"
+		"\t.section .data.rel.local.DW.ref.%s,\"awG\",@progbits,DW.ref.%s,comdat\n"
+		"\t.p2align 3\n"
+		"\t.type DW.ref.%s, @object\n"
+		"\t.size DW.ref.%s, 8\n"
+		"DW.ref.%s:\n"
+		"\t.quad %s\n"
+		"\t.text\n",
+		name, name, name, name, name, name, name, name
+	);
+}
+
+static void
+ehtabend(Fn *fn, FILE *f)
+{
+	uint k, c, t;
+	Blk *lp;
+	int types;
+
+	types = fn->nehty > 1;
+	fprintf(f,
+		"\t.section .gcc_except_table,\"a\",@progbits\n"
+		"\t.p2align 2\n"
+		".LEHL%u:\n"
+		"\t.byte 0xff\n",         /* no LPStart: the pads are offsets from the function */
+		ehcur
+	);
+	if (types)
+		fprintf(f,
+			"\t.byte 0x9b\n"   /* types: DW_EH_PE_indirect | pcrel | sdata4 (DW.ref) */
+			"\t.uleb128 .LEHTT%u-.LEHTTb%u\n"
+			".LEHTTb%u:\n",
+			ehcur, ehcur, ehcur
+		);
+	else
+		fputs("\t.byte 0xff\n", f);
+	fprintf(f,
+		"\t.byte 0x01\n"          /* call sites: uleb128 */
+		"\t.uleb128 .LEHCTe%u-.LEHCTb%u\n"
+		".LEHCTb%u:\n",
+		ehcur, ehcur, ehcur
+	);
+	for (k=0; k<nehcsv; k++) {
+		c = ehcsv[k];
+		lp = ehcslp[k];
+		fprintf(f,
+			"\t.uleb128 .LEHcsb%u-.LEHfs%u\n"
+			"\t.uleb128 .LEHcse%u-.LEHcsb%u\n",
+			c, ehcur, c, c
+		);
+		if (!lp)
+			fputs("\t.uleb128 0\n\t.uleb128 0\n", f);
+		else if (!lp->nehact)
+			fprintf(f, "\t.uleb128 .LEHp%u_%u-.LEHfs%u\n\t.uleb128 0\n", ehcur, lp->id, ehcur);
+		else
+			fprintf(f,
+				"\t.uleb128 .LEHp%u_%u-.LEHfs%u\n"
+				"\t.uleb128 .LEHA%u_%u-.LEHAT%u+1\n",
+				ehcur, lp->id, ehcur, ehcur, lp->id, ehcur
+			);
+	}
+	/* the action table: for each pad with catch clauses, one record per clause (its type id, then the offset to the
+	   next record, 1 as it follows), and a cleanup record (filter 0) last when the pad also runs cleanups */
+	fprintf(f, ".LEHCTe%u:\n.LEHAT%u:\n", ehcur, ehcur);
+	for (k=0; k<fn->nehpad; k++) {
+		lp = fn->ehpads[k];
+		if (!lp->nehact)
+			continue;
+		fprintf(f, ".LEHA%u_%u:\n", ehcur, lp->id);
+		for (t=0; t<lp->nehact; t++) {
+			fprintf(f, "\t.sleb128 %d\n", lp->ehact[t]);
+			fprintf(f, "\t.sleb128 %d\n", t+1 < lp->nehact || lp->ehclean ? 1 : 0);
+		}
+		if (lp->ehclean)
+			fputs("\t.sleb128 0\n\t.sleb128 0\n", f);
+	}
+	/* the types table, last entry first: type id N is the N-th entry before .LEHTT */
+	if (types) {
+		fputs("\t.p2align 2\n", f);
+		for (t=fn->nehty-1; t>=1; t--)
+			if (fn->ehty[t])
+				fprintf(f, "\t.long DW.ref.%s-.\n", fn->ehty[t]);
+			else
+				fputs("\t.long 0\n", f);
+		fprintf(f, ".LEHTT%u:\n", ehcur);
+	}
+	fputs("\t.text\n", f);
+	ehdwref("__nfcxx_personality_v0", f);
+	for (t=1; t<fn->nehty; t++)
+		if (fn->ehty[t])
+			ehdwref(fn->ehty[t], f);
 }
 
 void
@@ -120,6 +289,11 @@ ehfnend(Fn *fn, FILE *f)
 	static int persdef;   /* the personality's DW.ref, defined once per file (as gcc does) */
 	uint k, c;
 
+	if (ehtabon) {
+		ehtabend(fn, f);
+		ehtabon = 0;
+		return;
+	}
 	if (!fn->eh_lp)
 		return;
 	fprintf(f,

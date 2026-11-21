@@ -53,6 +53,10 @@ enum Token {
 	Tjmp,
 	Tjnz,
 	Tjtab,
+	Tehtype,
+	Tehpad,
+	Tehunwind,
+	Tehnoexc,
 	Tret,
 	Thlt,
 	Texport,
@@ -114,6 +118,10 @@ static char *kwmap[Ntok] = {
 	[Tjmp] = "jmp",
 	[Tjnz] = "jnz",
 	[Tjtab] = "jtab",
+	[Tehtype] = "ehtype",
+	[Tehpad] = "ehpad",
+	[Tehunwind] = "ehunwind",
+	[Tehnoexc] = "ehnoexcept",
 	[Tret] = "ret",
 	[Thlt] = "hlt",
 	[Texport] = "export",
@@ -146,8 +154,8 @@ enum {
 	TMask = 16383, /* for temps hash */
 	BMask = 8191, /* for blocks hash */
 
-	K = 20298703, /* found using tools/lexh.c */
-	M = 23,
+	K = 659164435, /* collision free for the keywords, with ehtype/ehpad/ehunwind/ehnoexcept (nfcxx) */
+	M = 22,
 };
 
 static uchar lexh[1 << (32-M)];
@@ -647,6 +655,69 @@ parseline(PState ps)
 		err("label, instruction or jump expected");
 	case Trbrace:
 		return PEnd;
+	/* Exception tables (nfcxx; emit.c, all.h Blk.ehmode):
+	     ehtype ID $sym | ehtype ID 0   type ID (1-based) of the function's catch clauses: a typeinfo, 0 for catch (...)
+	     ehnoexcept                     an exception that leaves a call without a landing pad calls std::terminate
+	     ehpad CLEANUP ID...            this block is a landing pad: its catch clauses' type ids in order, and 1 when it
+	                                    also runs cleanups (it is entered even when no clause matches)
+	     ehunwind @pad | ehunwind 0     the calls of this block unwind to @pad, or call std::terminate (0) */
+	case Tehtype:
+		if (next() != Tint || tokval.num < 1)
+			err("type id expected");
+		i = tokval.num;
+		if (!curf->ehty)
+			curf->ehty = vnew(0, sizeof curf->ehty[0], PFn);
+		if ((uint)i >= curf->nehty) {
+			vgrow(&curf->ehty, i + 1);
+			for (uint n=curf->nehty; n<=(uint)i; n++)
+				curf->ehty[n] = 0;
+			curf->nehty = i + 1;
+		}
+		t = next();
+		if (t == Tglo)
+			curf->ehty[i] = strf(PFn, "%s", tokval.str);
+		else if (t != Tint || tokval.num != 0)
+			err("typeinfo symbol or 0 expected");
+		curf->ehtab = 1;
+		expect(Tnl);
+		return PIns;
+	case Tehnoexc:
+		curf->ehnoexc = 1;
+		curf->ehtab = 1;
+		expect(Tnl);
+		return PIns;
+	case Tehpad:
+		if (curb == curf->start)
+			err("the start block cannot be a landing pad");
+		if (next() != Tint || (tokval.num != 0 && tokval.num != 1))
+			err("cleanup flag (0 or 1) expected");
+		curb->ehpad = 1;
+		curb->ehclean = tokval.num;
+		curb->ehmode = EhTerm;   /* a call of the pad (a destructor) that throws calls std::terminate */
+		curb->ehact = vnew(0, sizeof curb->ehact[0], PFn);
+		while (peek() == Tint) {
+			next();
+			if (tokval.num < 1)
+				err("type id expected");
+			vgrow(&curb->ehact, ++curb->nehact);
+			curb->ehact[curb->nehact-1] = tokval.num;
+		}
+		curf->ehtab = 1;
+		expect(Tnl);
+		return PIns;
+	case Tehunwind:
+		t = next();
+		if (t == Tlbl) {
+			curb->ehlp = findblk();
+			curb->ehmode = EhPad;
+		} else if (t == Tint && tokval.num == 0) {
+			curb->ehlp = 0;
+			curb->ehmode = EhTerm;
+		} else
+			err("landing pad or 0 expected");
+		curf->ehtab = 1;
+		expect(Tnl);
+		return PIns;
 	case Tlbl:
 		b = findblk();
 		if (curb && curb->jmp.type == Jxxx) {
@@ -997,6 +1068,29 @@ parsefn(Lnk *lnk)
 				err("multiple landing pads in @%s", curf->name);
 			curf->eh_lp = b;
 		}
+	}
+	/* the exception tables' landing pads: entered only by the unwinder (no jump reaches one) */
+	curf->ehpads = vnew(0, sizeof curf->ehpads[0], PFn);
+	curf->nehpad = 0;
+	if (curf->ehtab && curf->eh_lp)
+		err("@%s: eh.lp and exception table directives together", curf->name);
+	for (b=curf->start; b; b=b->link) {
+		if (b->ehpad) {
+			vgrow(&curf->ehpads, ++curf->nehpad);
+			curf->ehpads[curf->nehpad-1] = b;
+			for (uint n=0; n<b->nehact; n++)
+				if ((uint)b->ehact[n] >= curf->nehty)
+					err("@%s: unknown type id %d", b->name, b->ehact[n]);
+		}
+		if (b->ehmode == EhPad && !b->ehlp->ehpad)
+			err("@%s unwinds to @%s, which is not a landing pad", b->name, b->ehlp->name);
+	}
+	for (b=curf->start; b; b=b->link) {
+		if ((b->s1 && b->s1->ehpad) || (b->s2 && b->s2->ehpad))
+			err("@%s jumps to a landing pad", b->name);
+		for (uint n=0; n<b->ntab; n++)
+			if (b->tab[n]->ehpad)
+				err("@%s jumps to a landing pad", b->name);
 	}
 	for (i=0; i<BMask+1; ++i)
 		blkh[i] = 0;
