@@ -87,7 +87,8 @@ void
 ehfnbegin(Fn *fn, FILE *f)
 {
 	ehtabon = 0;
-	if (!fn->eh_lp && !ehneedtab(fn))
+	/* a leaf makes no call: nothing unwinds through it, and the target writes no CFI for it */
+	if (!fn->eh_lp && (!ehneedtab(fn) || fn->leaf))
 		return;
 	if (T.apple)
 		die("landing pads need ELF unwind tables (no Apple target)");
@@ -187,7 +188,11 @@ ehdwref(char *name, FILE *f)
 	done = realloc(done, (ndone + 1) * sizeof done[0]);
 	if (!done)
 		die("out of memory");
-	done[ndone++] = name;
+	/* a copy, not name: a type's symbol is in the function's pool, freed after it */
+	done[ndone] = malloc(strlen(name) + 1);
+	if (!done[ndone])
+		die("out of memory");
+	strcpy(done[ndone++], name);
 	fprintf(f,
 		"\t.hidden DW.ref.%s\n"
 		"\t.weak DW.ref.%s\n"
