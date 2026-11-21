@@ -2138,8 +2138,11 @@ slpblock(Fn *fn, Blk *b)
 		goto no;
 	nst = 0;
 	for (ins=b->ins; ins<&b->ins[b->nins]; ins++)
-		if (ins->op == Ostorew || ins->op == Ostores || ins->op == Ostored)
+		if (ins->op == Ostorew || ins->op == Ostores || ins->op == Ostored) {
+			if (nst == SLPN)
+				goto no;	/* more stores than st holds: not a block of one group (it overflowed st before) */
 			st[nst++] = ins;
+		}
 	for (kind=LW; kind<=LD; kind++) {
 		n = kind == LD ? 2 : 4;
 		size = kind == LD ? 8 : 4;

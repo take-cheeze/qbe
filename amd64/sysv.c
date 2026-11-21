@@ -689,7 +689,7 @@ framereader(Fn *fn, Ins *i)
    argument and no static chain, and the function must have no landing pad, no varargs and no stack slot (nostack: the
    frame the tail call removes must not hold anything the callee points into). Returns 1 and drops the return copy. */
 static int
-tailcallok(Blk *b, Ins *i0, Ins *i1, int nostack)
+tailcallok(Fn *fn, Blk *b, Ins *i0, Ins *i1, int nostack)
 {
 	Ins *c, *i;
 	AClass *ac, *a;
@@ -697,6 +697,9 @@ tailcallok(Blk *b, Ins *i0, Ins *i1, int nostack)
 	uint n;
 
 	if (!nostack || b->jmp.type != Jret0 || !req(i1->arg[1], R))
+		return 0;
+	/* exception tables (nfcxx): a call that unwinds to a pad or to std::terminate needs this frame's call site */
+	if (b->ehmode != EhDefault || b->ehpad || fn->ehnoexc || fn->nehspec)
 		return 0;
 	n = &insb[NIns] - curi;
 	if (n == 0) {
@@ -729,6 +732,7 @@ amd64_sysv_abi(Fn *fn)
 	int nostack;
 	int n0, n1, ioff, fa;
 
+	ehhoist(fn);
 	for (b=fn->start; b; b=b->link)
 		b->visit = 0;
 	/* lower parameters */
@@ -771,7 +775,7 @@ amd64_sysv_abi(Fn *fn)
 				for (i0=i; i0>b->ins; i0--)
 					if (!isarg((i0-1)->op))
 						break;
-				if (i == &b->ins[b->nins-1] && !framereader(fn, i) && tailcallok(b, i0, i, nostack)) {
+				if (i == &b->ins[b->nins-1] && !framereader(fn, i) && tailcallok(fn, b, i0, i, nostack)) {
 					curi = &insb[NIns];	/* the return copy goes: the callee's return value stays in place */
 					i->to = R;
 					b->tail = 1;
@@ -781,6 +785,13 @@ amd64_sysv_abi(Fn *fn)
 				break;
 			case Ovastart:
 				selvastart(fn, fa, i->arg[0]);
+				break;
+			case Oehptr:
+			case Oehsel:
+				/* a landing pad's exception and selector: %rax and %rdx, as the personality installed them */
+				if (!b->ehpad)
+					err("%s outside a landing pad", optab[i->op].name);
+				emit(Ocopy, Kl, i->to, TMP(i->op == Oehptr ? RAX : RDX), R);
 				break;
 			case Ovaarg:
 				selvaarg(fn, b, i);

@@ -65,9 +65,9 @@ emitfnlnk(char *n, Lnk *l, FILE *f)
 
    Exception tables (nfcxx, fn->ehtab: the ehtype/ehpad/ehunwind/ehnoexcept directives, all.h Blk.ehmode): several
    landing pads, catch clauses and std::terminate, in the Itanium C++ ABI's LSDA. The personality is
-   __nfcxx_personality_v0 (nfcxx's Path B runtime), which calls libstdc++'s __gxx_personality_v0 and keeps the exception
-   and the selector it gives a landing pad, where the pad's code reads them (__nfcxx_eh_ptr, __nfcxx_eh_sel): QBE has no
-   way to read the registers the personality sets. A call of a block with a pad (EhPad) is a call site with that pad and
+   libstdc++'s __gxx_personality_v0; a landing pad reads the exception and the selector it installs from their registers
+   (ehptr, ehsel: %rax and %rdx, x0 and x1; the abi passes make them copies), as gcc's __builtin_eh_pointer does.
+   A call of a block with a pad (EhPad) is a call site with that pad and
    the pad's actions (its catch clauses' type ids, then a cleanup when ehclean); a call that unwinds through the
    function (EhDefault) is a call site with no pad; a call that terminates (EhTerm, or EhDefault in an ehnoexcept
    function) has no call site, and the personality calls std::terminate when an exception leaves it. */
@@ -99,7 +99,7 @@ ehfnbegin(Fn *fn, FILE *f)
 		".LEHfs%u:\n"
 		"\t.cfi_personality 0x9b, DW.ref.%s\n"
 		"\t.cfi_lsda 0x1b, .LEHL%u\n",
-		ehcur, ehtabon ? "__nfcxx_personality_v0" : "__gcc_personality_v0", ehcur
+		ehcur, ehtabon ? "__gxx_personality_v0" : "__gcc_personality_v0", ehcur
 	);
 }
 
@@ -291,7 +291,7 @@ ehtabend(Fn *fn, FILE *f)
 		}
 	}
 	fputs("\t.text\n", f);
-	ehdwref("__nfcxx_personality_v0", f);
+	ehdwref("__gxx_personality_v0", f);
 	for (t=1; t<fn->nehty; t++)
 		if (fn->ehty[t])
 			ehdwref(fn->ehty[t], f);

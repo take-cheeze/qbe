@@ -815,3 +815,33 @@ runmatch(uchar *code, Num *tn, Ref ref, Ref *var)
 			break;
 		}
 }
+
+/* exception tables (nfcxx): a landing pad's ehptr and ehsel read the registers the personality installed, so they
+ * go first in the pad, before anything else can use those registers (their order among themselves is kept) */
+void
+ehhoist(Fn *fn)
+{
+	Blk *b;
+	Ins *i, *p;
+	uint n, k;
+
+	for (b=fn->start; b; b=b->link) {
+		if (!b->ehpad)
+			continue;
+		n = 0;
+		for (i=b->ins; i<&b->ins[b->nins]; i++)
+			if (i->op == Oehptr || i->op == Oehsel)
+				n++;
+		if (n == 0)
+			continue;
+		p = alloc(b->nins * sizeof p[0]);
+		k = 0;
+		for (i=b->ins; i<&b->ins[b->nins]; i++)
+			if (i->op == Oehptr || i->op == Oehsel)
+				p[k++] = *i;
+		for (i=b->ins; i<&b->ins[b->nins]; i++)
+			if (i->op != Oehptr && i->op != Oehsel)
+				p[k++] = *i;
+		memcpy(b->ins, p, b->nins * sizeof p[0]);
+	}
+}
