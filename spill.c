@@ -307,11 +307,14 @@ dopm(Blk *b, Ins *i, BSet *v)
 		i--;
 		t = i->to.val;
 		if (!req(i->to, R)) {
-			if (bshas(v, t))
+			if (bshas(v, t)) {
 				bsclr(v, t);
-			/* a spilled destination (live in its slot, not in a register: a landing pad's ehptr that only a phi of
-			 * the shared pad code reads, nfcxx) is stored there too, as the other definitions are */
-			store(i->to, tmp[t].slot);
+				store(i->to, tmp[t].slot);
+			} else if (b->ehpad)
+				/* a landing pad's leading copy whose destination is spilled (live in its slot, not in a
+				 * register: an ehptr that only a phi of the shared pad code reads, nfcxx) is stored there
+				 * too; elsewhere a dead copy needs no register */
+				store(i->to, tmp[t].slot);
 		}
 		bsset(v, i->arg[0].val);
 	} while (i != b->ins && regcpy(i-1));
