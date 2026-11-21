@@ -436,6 +436,8 @@ struct Fn {
 	char **ehty;
 	int *ehspec;  /* nfcxx: the type ids of a dynamic exception specification (ehspec) */
 	uint nehspec;
+	uint32_t *ehnothrow;  /* nfcxx: the interned names of the callees that let no exception out (ehnothrow) */
+	uint nehnothrow;
 	uint nehty;
 	Blk **ehpads;
 	uint nehpad;
@@ -688,8 +690,8 @@ void emitdbgloc(uint, uint, FILE *);
 int stashbits(bits, int);
 void ehfnbegin(Fn *, FILE *);
 void ehlpbegin(Fn *, Blk *, FILE *);
-void ehcsbegin(Fn *, Blk *, FILE *);
-void ehcsend(Fn *, Blk *, FILE *);
+void ehcsbegin(Fn *, Blk *, Ins *, FILE *);
+void ehcsend(Fn *, Blk *, Ins *, FILE *);
 void ehfnend(Fn *, FILE *);
 void elf_emitfnfin(char *, FILE *);
 void elf_emitfin(FILE *);

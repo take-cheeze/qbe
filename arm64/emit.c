@@ -798,10 +798,10 @@ arm64_emitfn(Fn *fn, FILE *out)
 			fprintf(e->f, "%s%d:\n", T.asloc, id0+b->id);
 		for (i=b->ins; i!=&b->ins[b->nins]; i++) {
 			if (i->op == Ocall)
-				ehcsbegin(e->fn, b, e->f);
+				ehcsbegin(e->fn, b, i, e->f);
 			emitins(i, e);
 			if (i->op == Ocall)
-				ehcsend(e->fn, b, e->f);
+				ehcsend(e->fn, b, i, e->f);
 		}
 		lbl = 1;
 		switch (b->jmp.type) {
