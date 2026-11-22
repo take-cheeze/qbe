@@ -372,6 +372,19 @@ uffind(Blk **pb, Blk **uf)
 		*pb = *pb1;
 	}
 }
+/* a block whose instructions are only source locations (dbgloc, nop): empty for the jump threading, so that a line
+   table (-g) does not change the code (nfcxx) */
+static int
+onlydbg(Blk *b)
+{
+	Ins *i;
+
+	for (i=b->ins; i<&b->ins[b->nins]; i++)
+		if (i->op != Odbgloc && i->op != Onop)
+			return 0;
+	return 1;
+}
+
 
 /* requires rpo and no phis, breaks cfg */
 void
@@ -392,7 +405,7 @@ simpljmp(Fn *fn)
 			b->jmp.type = Jjmp;
 			b->s1 = ret;
 		}
-		if (b->nins == 0 && !b->keep)
+		if (onlydbg(b) && !b->keep)
 		if (b->jmp.type == Jjmp) {
 			uffind(&b->s1, uf);
 			if (b->s1 != b)

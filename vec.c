@@ -634,9 +634,16 @@ findloop(Fn *fn, Blk *H, Loop *lp)
 	Use *u;
 
 	memset(&st, 0, sizeof st);
-	if (H->jmp.type != Jjnz || H->s1 == H || H->s2 == H || H->npred != 2 || H->nins != 1 || !H->phi)
+	/* the header's one instruction is its compare (source locations, dbgloc, aside: -g does not change the code) */
+	cmp = 0;
+	for (ins=H->ins; ins<&H->ins[H->nins]; ins++)
+		if (ins->op != Odbgloc && ins->op != Onop) {
+			if (cmp)
+				return rej(__LINE__);
+			cmp = ins;
+		}
+	if (H->jmp.type != Jjnz || H->s1 == H || H->s2 == H || H->npred != 2 || !cmp || !H->phi)
 		return rej(__LINE__);
-	cmp = &H->ins[0];
 	cmpop = cmpkind(cmp->op);
 	if (cmpop < 0 || (cmp->cls != Kw && cmp->cls != Kl) || !req(H->jmp.arg, cmp->to))
 		return rej(__LINE__);
