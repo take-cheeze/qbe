@@ -295,6 +295,10 @@ struct Blk {
 	char ehclean;
 	int *ehact;
 	uint nehact;
+	/* ehspecpad (nfcxx): a landing pad's own dynamic exception specification, its type ids; the pad's action chain ends with
+	   its filter, in place of the function's (Fn.ehspec) */
+	int *ehspec;
+	uint nehspec;
 };
 
 enum {

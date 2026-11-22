@@ -58,6 +58,7 @@ enum Token {
 	Tehunwind,
 	Tehnoexc,
 	Tehspec,
+	Tehspecpad,
 	Tehnothrow,
 	Tret,
 	Thlt,
@@ -125,6 +126,7 @@ static char *kwmap[Ntok] = {
 	[Tehunwind] = "ehunwind",
 	[Tehnoexc] = "ehnoexcept",
 	[Tehspec] = "ehspec",
+	[Tehspecpad] = "ehspecpad",
 	[Tehnothrow] = "ehnothrow",
 	[Tret] = "ret",
 	[Thlt] = "hlt",
@@ -667,6 +669,8 @@ parseline(PState ps)
 	     ehpad CLEANUP ID...            this block is a landing pad: its catch clauses' type ids in order, and 1 when it
 	                                    also runs cleanups (it is entered even when no clause matches)
 	     ehunwind @pad | ehunwind 0     the calls of this block unwind to @pad, or call std::terminate (0)
+	     ehspecpad @pad ID...           the landing pad's own specification (a copy of a callee with one, scripts/pathb-ir-opt.rb):
+	                                    its action chain ends with that list's filter, instead of the function's ehspec
 	     ehnothrow $sym...              these callees let no exception out: their calls need no call site entry */
 	case Tehtype:
 		if (next() != Tint || tokval.num < 1)
@@ -700,6 +704,24 @@ parseline(PState ps)
 		}
 		if (!curf->nehspec)
 			err("type id expected");
+		curf->ehtab = 1;
+		expect(Tnl);
+		return PIns;
+	case Tehspecpad:
+		if (next() != Tlbl)
+			err("landing pad expected");
+		b = findblk();
+		if (peek() != Tint)
+			err("type id expected");
+		while (peek() == Tint) {
+			next();
+			if (tokval.num < 1)
+				err("type id expected");
+			if (!b->ehspec)
+				b->ehspec = vnew(0, sizeof b->ehspec[0], PFn);
+			vgrow(&b->ehspec, ++b->nehspec);
+			b->ehspec[b->nehspec-1] = tokval.num;
+		}
 		curf->ehtab = 1;
 		expect(Tnl);
 		return PIns;
@@ -1109,6 +1131,13 @@ parsefn(Lnk *lnk)
 	for (uint n=0; n<curf->nehspec; n++)
 		if ((uint)curf->ehspec[n] >= curf->nehty)
 			err("ehspec: unknown type id %d", curf->ehspec[n]);
+	for (b=curf->start; b; b=b->link) {
+		if (b->nehspec && !b->ehpad)
+			err("@%s has an ehspecpad list, but is not a landing pad", b->name);
+		for (uint n=0; n<b->nehspec; n++)
+			if ((uint)b->ehspec[n] >= curf->nehty)
+				err("@%s: ehspecpad: unknown type id %d", b->name, b->ehspec[n]);
+	}
 	for (b=curf->start; b; b=b->link) {
 		if (b->ehpad) {
 			vgrow(&curf->ehpads, ++curf->nehpad);
