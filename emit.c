@@ -90,21 +90,31 @@ ehneedtab(Fn *fn)
 void
 ehfnbegin(Fn *fn, FILE *f)
 {
+	char pers[64];
+
 	ehtabon = 0;
 	/* a leaf makes no call: nothing unwinds through it, and the target writes no CFI for it */
 	if (!fn->eh_lp && (!ehneedtab(fn) || fn->leaf))
 		return;
-	if (T.apple)
+	if (T.apple && (!T.machtab || fn->eh_lp))
 		die("landing pads need ELF unwind tables (no Apple target)");
 	ehcur = ++ehnext;
 	nehcsv = 0;
 	ehcsbrk = 0;
 	ehtabon = !fn->eh_lp;
+	/* the personality: a DW.ref indirection (ELF), or the symbol itself, whose GOT entry the assembler makes (Mach-O,
+	   as clang's output does) */
+	if (T.apple)
+		snprintf(pers, sizeof pers, "%s__gxx_personality_v0", T.assym);
+	else
+		snprintf(pers, sizeof pers, "DW.ref.%s", ehtabon ? "__gxx_personality_v0" : "__gcc_personality_v0");
+	/* the LSDA pointer: pcrel (0x1b) on ELF; on Mach-O the aligned absolute form (16), as clang's, because the assembler
+	   cannot put a pcrel LSDA into __LD,__compact_unwind (its entries come out 84 bytes long, and ld64 rejects them) */
 	fprintf(f,
-		".LEHfs%u:\n"
-		"\t.cfi_personality 0x9b, DW.ref.%s\n"
-		"\t.cfi_lsda 0x1b, .LEHL%u\n",
-		ehcur, ehtabon ? "__gxx_personality_v0" : "__gcc_personality_v0", ehcur
+		"%sEHfs%u:\n"
+		"\t.cfi_personality 0x9b, %s\n"
+		"\t.cfi_lsda %s, %sEHL%u\n",
+		T.asloc, ehcur, pers, T.apple ? "16" : "0x1b", T.asloc, ehcur
 	);
 }
 
@@ -113,11 +123,11 @@ ehlpbegin(Fn *fn, Blk *b, FILE *f)
 {
 	if (ehtabon) {
 		if (b->ehpad)
-			fprintf(f, ".LEHp%u_%u:\n", ehcur, b->id);
+			fprintf(f, "%sEHp%u_%u:\n", T.asloc, ehcur, b->id);
 		return;
 	}
 	if (b == fn->eh_lp)
-		fprintf(f, ".LEHlp%u:\n", ehcur);
+		fprintf(f, "%sEHlp%u:\n", T.asloc, ehcur);
 }
 
 /* the landing pad of a call of b (exception tables), or -1 when the call has no call site entry */
@@ -200,7 +210,7 @@ ehcsbegin(Fn *fn, Blk *b, Ins *i, FILE *f)
 	ehcslp[nehcsv] = lp;
 	ehcsve[nehcsv] = ehcscur;
 	ehcsv[nehcsv++] = ehcscur;
-	fprintf(f, ".LEHcsb%u:\n", ehcscur);
+	fprintf(f, "%sEHcsb%u:\n", T.asloc, ehcscur);
 }
 
 void
@@ -217,7 +227,7 @@ ehcsend(Fn *fn, Blk *b, Ins *i, FILE *f)
 			return;
 	} else if (!fn->eh_lp || b == fn->eh_lp)
 		return;
-	fprintf(f, ".LEHcse%u:\n", ehcscur);
+	fprintf(f, "%sEHcse%u:\n", T.asloc, ehcscur);
 }
 
 /* DW.ref.NAME: an indirection the LSDA and the CIE reach PC-relatively (as gcc does), once per file */
@@ -228,6 +238,8 @@ ehdwref(char *name, FILE *f)
 	static uint ndone;
 	uint k;
 
+	if (T.apple)
+		return;   /* Mach-O names the symbols and their GOT entries itself (ehtabend, ehfnbegin) */
 	for (k=0; k<ndone; k++)
 		if (strcmp(done[k], name) == 0)
 			return;
@@ -259,76 +271,86 @@ ehtabend(Fn *fn, FILE *f)
 	uint k, c, t;
 	Blk *lp;
 	int types;
+	char *L = T.asloc;   /* the local label prefix: ".L" (ELF), "L" (Mach-O, where only L names are assembler-local) */
 
 	types = fn->nehty > 1 || fn->nehspec;
+	fputs(T.apple ? "\t.section __TEXT,__gcc_except_tab\n"
+	                : "\t.section .gcc_except_table,\"a\",@progbits\n", f);
+	/* Mach-O: a non-local symbol at the table's start, as clang's GCC_except_tableN. Without it the assembler resolves
+	   the LSDA pointers of a later function in the object wrongly (into the previous table, 24 bytes early). */
+	if (T.apple)
+		fprintf(f, "\t.p2align 2, 0x0\nGCC_except_table%u:\n", ehcur);
+	else
+		fputs("\t.p2align 2\n", f);
 	fprintf(f,
-		"\t.section .gcc_except_table,\"a\",@progbits\n"
-		"\t.p2align 2\n"
-		".LEHL%u:\n"
+		"%sEHL%u:\n"
 		"\t.byte 0xff\n",         /* no LPStart: the pads are offsets from the function */
-		ehcur
+		L, ehcur
 	);
 	if (types)
 		fprintf(f,
-			"\t.byte 0x9b\n"   /* types: DW_EH_PE_indirect | pcrel | sdata4 (DW.ref) */
-			"\t.uleb128 .LEHTT%u-.LEHTTb%u\n"
-			".LEHTTb%u:\n",
-			ehcur, ehcur, ehcur
+			"\t.byte 0x9b\n"   /* types: DW_EH_PE_indirect | pcrel | sdata4 (DW.ref, or the GOT entry on Mach-O) */
+			"\t.uleb128 %sEHTT%u-%sEHTTb%u\n"
+			"%sEHTTb%u:\n",
+			L, ehcur, L, ehcur, L, ehcur
 		);
 	else
 		fputs("\t.byte 0xff\n", f);
 	fprintf(f,
 		"\t.byte 0x01\n"          /* call sites: uleb128 */
-		"\t.uleb128 .LEHCTe%u-.LEHCTb%u\n"
-		".LEHCTb%u:\n",
-		ehcur, ehcur, ehcur
+		"\t.uleb128 %sEHCTe%u-%sEHCTb%u\n"
+		"%sEHCTb%u:\n",
+		L, ehcur, L, ehcur, L, ehcur
 	);
 	for (k=0; k<nehcsv; k++) {
 		c = ehcsv[k];
 		lp = ehcslp[k];
 		fprintf(f,
-			"\t.uleb128 .LEHcsb%u-.LEHfs%u\n"
-			"\t.uleb128 .LEHcse%u-.LEHcsb%u\n",
-			c, ehcur, ehcsve[k], c
+			"\t.uleb128 %sEHcsb%u-%sEHfs%u\n"
+			"\t.uleb128 %sEHcse%u-%sEHcsb%u\n",
+			L, c, L, ehcur, L, ehcsve[k], L, c
 		);
 		if (!lp)
 			fputs("\t.uleb128 0\n\t.uleb128 0\n", f);
 		else if (!lp->nehact && !fn->nehspec)
-			fprintf(f, "\t.uleb128 .LEHp%u_%u-.LEHfs%u\n\t.uleb128 0\n", ehcur, lp->id, ehcur);
+			fprintf(f, "\t.uleb128 %sEHp%u_%u-%sEHfs%u\n\t.uleb128 0\n", L, ehcur, lp->id, L, ehcur);
 		else
 			fprintf(f,
-				"\t.uleb128 .LEHp%u_%u-.LEHfs%u\n"
-				"\t.uleb128 .LEHA%u_%u-.LEHAT%u+1\n",
-				ehcur, lp->id, ehcur, ehcur, lp->id, ehcur
+				"\t.uleb128 %sEHp%u_%u-%sEHfs%u\n"
+				"\t.uleb128 %sEHA%u_%u-%sEHAT%u+1\n",
+				L, ehcur, lp->id, L, ehcur, L, ehcur, lp->id, L, ehcur
 			);
 	}
 	/* the action table: for each pad with catch clauses, one record per clause (its type id, then the offset to the
 	   next record, 1 as it follows), and a cleanup record (filter 0) last when the pad also runs cleanups */
-	fprintf(f, ".LEHCTe%u:\n.LEHAT%u:\n", ehcur, ehcur);
+	fprintf(f, "%sEHCTe%u:\n%sEHAT%u:\n", L, ehcur, L, ehcur);
 	for (k=0; k<fn->nehpad; k++) {
 		lp = fn->ehpads[k];
 		if (!lp->nehact && !fn->nehspec)
 			continue;
-		fprintf(f, ".LEHA%u_%u:\n", ehcur, lp->id);
+		fprintf(f, "%sEHA%u_%u:\n", L, ehcur, lp->id);
 		for (t=0; t<lp->nehact; t++) {
 			fprintf(f, "\t.sleb128 %d\n", lp->ehact[t]);
 			fprintf(f, "\t.sleb128 %d\n", t+1 < lp->nehact || lp->ehclean || fn->nehspec ? 1 : 0);
 		}
-		/* the dynamic exception specification: filter -1 (its list at offset 0 after .LEHTT) */
+		/* the dynamic exception specification: filter -1 (its list at offset 0 after LEHTT) */
 		if (fn->nehspec)
 			fprintf(f, "\t.sleb128 -1\n\t.sleb128 %d\n", lp->ehclean ? 1 : 0);
 		if (lp->ehclean)
 			fputs("\t.sleb128 0\n\t.sleb128 0\n", f);
 	}
-	/* the types table, last entry first: type id N is the N-th entry before .LEHTT */
+	/* the types table, last entry first: type id N is the N-th entry before LEHTT */
 	if (types) {
 		fputs("\t.p2align 2\n", f);
 		for (t=fn->nehty-1; t>=1; t--)
-			if (fn->ehty[t])
-				fprintf(f, "\t.long DW.ref.%s-.\n", fn->ehty[t]);
-			else
+			if (!fn->ehty[t])
 				fputs("\t.long 0\n", f);
-		fprintf(f, ".LEHTT%u:\n", ehcur);
+			else if (T.apple)   /* the typeinfo's GOT entry, relative to the entry (as clang's) */
+				fprintf(f, "%sEHTY%u_%u:\n\t.long %s%s@GOT-%sEHTY%u_%u\n",
+					L, ehcur, t, T.assym, fn->ehty[t], L, ehcur, t);
+			else
+				fprintf(f, "\t.long DW.ref.%s-.\n", fn->ehty[t]);
+		fprintf(f, "%sEHTT%u:\n", L, ehcur);
 		/* the exception specification list: its type ids, 0 at the end */
 		if (fn->nehspec) {
 			for (t=0; t<fn->nehspec; t++)
@@ -359,25 +381,25 @@ ehfnend(Fn *fn, FILE *f)
 	fprintf(f,
 		"\t.section .gcc_except_table,\"a\",@progbits\n"
 		"\t.p2align 2\n"
-		".LEHL%u:\n"
+		"%sEHL%u:\n"
 		"\t.byte 0xff\n"          /* no LPStart: the pads are offsets from the function */
 		"\t.byte 0xff\n"          /* no types table: no catch clauses */
 		"\t.byte 0x01\n"          /* call sites: uleb128 */
-		"\t.uleb128 .LEHCTe%u-.LEHCTb%u\n"
-		".LEHCTb%u:\n",
-		ehcur, ehcur, ehcur, ehcur
+		"\t.uleb128 %sEHCTe%u-%sEHCTb%u\n"
+		"%sEHCTb%u:\n",
+		T.asloc, ehcur, T.asloc, ehcur, T.asloc, ehcur
 	);
 	for (k=0; k<nehcsv; k++) {
 		c = ehcsv[k];
 		fprintf(f,
-			"\t.uleb128 .LEHcsb%u-.LEHfs%u\n"
-			"\t.uleb128 .LEHcse%u-.LEHcsb%u\n"
-			"\t.uleb128 .LEHlp%u-.LEHfs%u\n"
+			"\t.uleb128 %sEHcsb%u-%sEHfs%u\n"
+			"\t.uleb128 %sEHcse%u-%sEHcsb%u\n"
+			"\t.uleb128 %sEHlp%u-%sEHfs%u\n"
 			"\t.uleb128 0\n",
-			c, ehcur, ehcsve[k], c, ehcur, ehcur
+			T.asloc, c, T.asloc, ehcur, T.asloc, ehcsve[k], T.asloc, c, T.asloc, ehcur, T.asloc, ehcur
 		);
 	}
-	fprintf(f, ".LEHCTe%u:\n\t.text\n", ehcur);
+	fprintf(f, "%sEHCTe%u:\n\t.text\n", T.asloc, ehcur);
 	if (persdef)
 		return;
 	persdef = 1;

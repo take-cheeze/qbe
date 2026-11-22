@@ -53,6 +53,7 @@ Target T_arm64 = {
 Target T_arm64_apple = {
 	.name = "arm64_apple",
 	.apple = 1,
+	.machtab = 1,
 	.abi0 = apple_extsb,
 	.emitfin = macho_emitfin,
 	.asloc = "L",
