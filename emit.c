@@ -257,19 +257,19 @@ ehdwref(char *name, FILE *f)
 static int
 ehpadspec(Fn *fn, Blk *lp)
 {
-	return lp->nehspec || fn->nehspec;
+	return lp->nehspecs || fn->nehspec;
 }
 
 static void
 ehtabend(Fn *fn, FILE *f)
 {
-	uint k, c, t;
+	uint k, c, t, j, nrec, rec;
 	Blk *lp;
 	int types, anyspec;
 
 	anyspec = fn->nehspec != 0;
 	for (k=0; k<fn->nehpad; k++)
-		anyspec |= fn->ehpads[k]->nehspec != 0;
+		anyspec |= fn->ehpads[k]->nehspecs != 0;
 	types = fn->nehty > 1 || anyspec;
 	fprintf(f,
 		"\t.section .gcc_except_table,\"a\",@progbits\n"
@@ -320,16 +320,22 @@ ehtabend(Fn *fn, FILE *f)
 		if (!lp->nehact && !ehpadspec(fn, lp))
 			continue;
 		fprintf(f, ".LEHA%u_%u:\n", ehcur, lp->id);
+		/* the records in order: the clauses, and the filters (-K: the pad's list K, at its place in the chain), the
+		   function's filter when the pad has no list of its own, then the cleanup. Each record is two bytes: its next
+		   offset is 1 when another record follows */
+		nrec = lp->nehact + (lp->nehspecs == 0 && fn->nehspec ? 1 : 0) + (lp->ehclean ? 1 : 0);
+		rec = 0;
 		for (t=0; t<lp->nehact; t++) {
-			fprintf(f, "\t.sleb128 %d\n", lp->ehact[t]);
-			fprintf(f, "\t.sleb128 %d\n", t+1 < lp->nehact || lp->ehclean || ehpadspec(fn, lp) ? 1 : 0);
+			if (lp->ehact[t] < 0)   /* the filter is the negative of its list's offset after .LEHTT, less 1 */
+				fprintf(f, "\t.sleb128 .LEHTT%u-.LEHSP%u_%u_%d-1\n", ehcur, ehcur, lp->id, -lp->ehact[t]);
+			else
+				fprintf(f, "\t.sleb128 %d\n", lp->ehact[t]);
+			fprintf(f, "\t.sleb128 %d\n", ++rec < nrec ? 1 : 0);
 		}
-		/* the dynamic exception specification: its filter is the negative of its list's offset after .LEHTT, less 1
-		   (the function's list is at offset 0: -1; a pad's own list, ehspecpad, follows it) */
-		if (lp->nehspec)
-			fprintf(f, "\t.sleb128 .LEHTT%u-.LEHSP%u_%u-1\n\t.sleb128 %d\n", ehcur, ehcur, lp->id, lp->ehclean ? 1 : 0);
-		else if (fn->nehspec)
-			fprintf(f, "\t.sleb128 -1\n\t.sleb128 %d\n", lp->ehclean ? 1 : 0);
+		if (lp->nehspecs == 0 && fn->nehspec) {   /* the function's list is at offset 0: -1 */
+			fputs("\t.sleb128 -1\n", f);
+			fprintf(f, "\t.sleb128 %d\n", ++rec < nrec ? 1 : 0);
+		}
 		if (lp->ehclean)
 			fputs("\t.sleb128 0\n\t.sleb128 0\n", f);
 	}
@@ -350,12 +356,12 @@ ehtabend(Fn *fn, FILE *f)
 		}
 		for (k=0; k<fn->nehpad; k++) {
 			lp = fn->ehpads[k];
-			if (!lp->nehspec)
-				continue;
-			fprintf(f, ".LEHSP%u_%u:\n", ehcur, lp->id);
-			for (t=0; t<lp->nehspec; t++)
-				fprintf(f, "\t.uleb128 %d\n", lp->ehspec[t]);
-			fputs("\t.uleb128 0\n", f);
+			for (j=0; j<lp->nehspecs; j++) {
+				fprintf(f, ".LEHSP%u_%u_%u:\n", ehcur, lp->id, j+1);
+				for (t=0; t<lp->ehspecs[j].n; t++)
+					fprintf(f, "\t.uleb128 %d\n", lp->ehspecs[j].ids[t]);
+				fputs("\t.uleb128 0\n", f);
+			}
 		}
 	}
 	fputs("\t.text\n", f);

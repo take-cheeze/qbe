@@ -252,6 +252,11 @@ struct Phi {
 	Phi *link;
 };
 
+struct ehlist {   /* nfcxx: a dynamic exception specification's type ids (ehspecpad), 0-terminated in the table */
+	int *ids;
+	uint n;
+};
+
 struct Blk {
 	Phi *phi;
 	Ins *ins;
@@ -293,12 +298,12 @@ struct Blk {
 	char ehmode;
 	char ehpad;
 	char ehclean;
-	int *ehact;
+	int *ehact;   /* a negative entry -K is the filter of the pad's K-th specification list (ehspecpad), in the chain there */
 	uint nehact;
-	/* ehspecpad (nfcxx): a landing pad's own dynamic exception specification, its type ids; the pad's action chain ends with
-	   its filter, in place of the function's (Fn.ehspec) */
-	int *ehspec;
-	uint nehspec;
+	/* ehspecpad (nfcxx): the pad's own dynamic exception specifications (1-based lists: ehspecpad @pad K ID...); each
+	   filter is in the action chain where its -K entry of ehact is, in place of the function's (Fn.ehspec) when the pad has none */
+	struct ehlist *ehspecs;
+	uint nehspecs;
 };
 
 enum {

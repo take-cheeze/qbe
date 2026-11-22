@@ -666,11 +666,13 @@ parseline(PState ps)
 	     ehnoexcept                     an exception that leaves a call without a landing pad calls std::terminate
 	     ehspec ID...                   a dynamic exception specification (C++14 throw(T...)): the types it allows;
 	                                    every landing pad's action chain ends with its filter (a negative selector)
-	     ehpad CLEANUP ID...            this block is a landing pad: its catch clauses' type ids in order, and 1 when it
-	                                    also runs cleanups (it is entered even when no clause matches)
+	     ehpad CLEANUP ID...            this block is a landing pad: its action chain in order, and 1 when it also runs
+	                                    cleanups (it is entered even when no clause matches). An ID is a catch clause's type
+	                                    id, or -K: the filter of the pad's list K (ehspecpad) at that place of the chain
 	     ehunwind @pad | ehunwind 0     the calls of this block unwind to @pad, or call std::terminate (0)
-	     ehspecpad @pad ID...           the landing pad's own specification (a copy of a callee with one, scripts/pathb-ir-opt.rb):
-	                                    its action chain ends with that list's filter, instead of the function's ehspec
+	     ehspecpad @pad K ID...         list K (from 1) of the landing pad's own dynamic exception specifications (a copy of a
+	                                    callee with one, scripts/pathb-ir-opt.rb): its filter is the pad's -K entry. A pad with
+	                                    lists has no function's ehspec filter at the end of its chain
 	     ehnothrow $sym...              these callees let no exception out: their calls need no call site entry */
 	case Tehtype:
 		if (next() != Tint || tokval.num < 1)
@@ -707,24 +709,38 @@ parseline(PState ps)
 		curf->ehtab = 1;
 		expect(Tnl);
 		return PIns;
-	case Tehspecpad:
+	case Tehspecpad: {
+		int k;
+		struct ehlist *l;
 		if (next() != Tlbl)
 			err("landing pad expected");
 		b = findblk();
-		if (peek() != Tint)
-			err("type id expected");
+		if (next() != Tint || tokval.num < 1)
+			err("ehspecpad: the list's number (1 or more) expected");
+		k = tokval.num;
+		if (!b->ehspecs)
+			b->ehspecs = vnew(0, sizeof b->ehspecs[0], PFn);
+		if ((uint)k > b->nehspecs) {
+			vgrow(&b->ehspecs, k);
+			for (uint n=b->nehspecs; n<(uint)k; n++)
+				b->ehspecs[n] = (struct ehlist){0};
+			b->nehspecs = k;
+		}
+		l = &b->ehspecs[k-1];
+		if (l->ids)
+			err("@%s: ehspecpad %d given twice", b->name, k);
+		l->ids = vnew(0, sizeof l->ids[0], PFn);
 		while (peek() == Tint) {
 			next();
 			if (tokval.num < 1)
 				err("type id expected");
-			if (!b->ehspec)
-				b->ehspec = vnew(0, sizeof b->ehspec[0], PFn);
-			vgrow(&b->ehspec, ++b->nehspec);
-			b->ehspec[b->nehspec-1] = tokval.num;
+			vgrow(&l->ids, ++l->n);
+			l->ids[l->n-1] = tokval.num;
 		}
 		curf->ehtab = 1;
 		expect(Tnl);
 		return PIns;
+	}
 	case Tehnothrow:
 		if (!curf->ehnothrow)
 			curf->ehnothrow = vnew(0, sizeof curf->ehnothrow[0], PFn);
@@ -751,8 +767,8 @@ parseline(PState ps)
 		curb->ehact = vnew(0, sizeof curb->ehact[0], PFn);
 		while (peek() == Tint) {
 			next();
-			if (tokval.num < 1)
-				err("type id expected");
+			if (tokval.num == 0)
+				err("type id or -K (the filter of ehspecpad K) expected");
 			vgrow(&curb->ehact, ++curb->nehact);
 			curb->ehact[curb->nehact-1] = tokval.num;
 		}
@@ -1132,19 +1148,27 @@ parsefn(Lnk *lnk)
 		if ((uint)curf->ehspec[n] >= curf->nehty)
 			err("ehspec: unknown type id %d", curf->ehspec[n]);
 	for (b=curf->start; b; b=b->link) {
-		if (b->nehspec && !b->ehpad)
+		if (b->nehspecs && !b->ehpad)
 			err("@%s has an ehspecpad list, but is not a landing pad", b->name);
-		for (uint n=0; n<b->nehspec; n++)
-			if ((uint)b->ehspec[n] >= curf->nehty)
-				err("@%s: ehspecpad: unknown type id %d", b->name, b->ehspec[n]);
+		for (uint n=0; n<b->nehspecs; n++) {
+			if (!b->ehspecs[n].ids)
+				err("@%s: ehspecpad %u missing (lists are numbered from 1)", b->name, n+1);
+			for (uint t=0; t<b->ehspecs[n].n; t++)
+				if ((uint)b->ehspecs[n].ids[t] >= curf->nehty)
+					err("@%s: ehspecpad: unknown type id %d", b->name, b->ehspecs[n].ids[t]);
+		}
 	}
 	for (b=curf->start; b; b=b->link) {
 		if (b->ehpad) {
 			vgrow(&curf->ehpads, ++curf->nehpad);
 			curf->ehpads[curf->nehpad-1] = b;
-			for (uint n=0; n<b->nehact; n++)
-				if ((uint)b->ehact[n] >= curf->nehty)
+			for (uint n=0; n<b->nehact; n++) {
+				if (b->ehact[n] < 0) {   /* the filter of list -ehact[n] */
+					if ((uint)-b->ehact[n] > b->nehspecs)
+						err("@%s: ehspecpad %d unknown", b->name, -b->ehact[n]);
+				} else if ((uint)b->ehact[n] >= curf->nehty)
 					err("@%s: unknown type id %d", b->name, b->ehact[n]);
+			}
 		}
 		if (b->ehmode == EhPad && !b->ehlp->ehpad)
 			err("@%s unwinds to @%s, which is not a landing pad", b->name, b->ehlp->name);
