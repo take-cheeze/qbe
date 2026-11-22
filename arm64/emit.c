@@ -723,8 +723,9 @@ arm64_emitfn(Fn *fn, FILE *out)
 	e = &(E){.f = out, .fn = fn};
 	if (T.apple)
 		e->fn->lnk.align = 4;
-	/* DWARF CFI for functions that make calls (see amd64_sysv_emitfn); Apple targets are not covered. */
-	unw = !T.apple && !fn->leaf;
+	/* DWARF CFI for functions that make calls (see amd64_sysv_emitfn). Apple arm64 writes it too: its unwinder reads
+	   these FDEs from __TEXT,__eh_frame, the same as ELF's, and the exception tables need them. */
+	unw = !fn->leaf;
 	emitfnlnk(e->fn->name, &e->fn->lnk, e->f);
 	if (unw)
 		fputs("\t.cfi_startproc\n", e->f);
