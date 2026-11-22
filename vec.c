@@ -972,6 +972,10 @@ findloop(Fn *fn, Blk *H, Loop *lp)
 /* build: the instructions of the block being made, in order (idup copies them) */
 static Ins *ib;
 static uint nib;
+/* build: the broadcasts of invariants, made in P (they dominate the loop): they run once per entry of the loop,
+ * not per vector, so the body does not rebuild them. The body reuses the vector in a register. */
+static Ins *pib;
+static uint npib;
 static int vecw;	/* build: the loop being built is wide (lp->wide): its vector ops are the 256-bit ones */
 static int vecr;	/* build: the loop being built is an RVV one (lp->rvv): its vector ops are the generic ones */
 
@@ -1026,6 +1030,15 @@ push(int op, int cls, Ref to, Ref a0, Ref a1)
 	if (vecw)
 		op = wideop(op);
 	ib[nib++] = (Ins){.op = op, .cls = cls, .to = to, .arg = {a0, a1}};
+}
+
+static void
+pushp(int op, int cls, Ref to, Ref a0, Ref a1)
+{
+	vgrow(&pib, npib+1);
+	if (vecw)
+		op = wideop(op);
+	pib[npib++] = (Ins){.op = op, .cls = cls, .to = to, .arg = {a0, a1}};
 }
 
 static Ref
@@ -1118,10 +1131,10 @@ laneop(Fn *fn, Loop *lp, Ref r, int cls, int kind)
 		s = r;
 	} else {
 		s = newtmp("vec", cls, fn);
-		push(Ocopy, cls, s, r, R);
+		pushp(Ocopy, cls, s, r, R);
 	}
 	v = newvec(fn);
-	push(bop, Kd, v, s, R);
+	pushp(bop, Kd, v, s, R);
 	if (rtype(r) == RTmp && r.val < lp->nt)
 		lp->map[r.val] = v;
 	return v;
@@ -1423,6 +1436,7 @@ build(Fn *fn, Loop *lp)
 		P->link = Hv;
 
 	/* the body, on the lanes: Bv */
+	npib = 0;
 	memset(lp->map, 0, lp->nt * sizeof lp->map[0]);
 	lp->map[lp->i.val] = vb;
 	for (k=0; k<(uint)nred; k++)
@@ -1597,6 +1611,12 @@ build(Fn *fn, Loop *lp)
 		push(lp->ivstep > 0 ? Ovecaddw : Ovecsubw, Kd, lp->vin, lp->vi, lp->vstep);
 	push(lp->ivstep > 0 ? Oadd : Osub, lp->ivcls, ivn, iv, getcon(lp->vf * lp->unit, fn));
 	idup(Bv, ib, nib);
+	if (npib) {
+		vgrow(&P->ins, P->nins + npib);
+		memmove(P->ins + P->nins, pib, npib * sizeof pib[0]);
+		P->nins += npib;
+		npib = 0;
+	}
 	Bv->jmp.type = Jjmp;
 	Bv->s1 = Hv;
 	Bv->s2 = 0;
@@ -2273,6 +2293,7 @@ vec(Fn *fn)
 	if (nofp || (rvv ? !vecavx : (strcmp(T.name, "amd64_sysv") != 0 && strcmp(T.name, "arm64") != 0)))
 		return;
 	ib = vnew(0, sizeof ib[0], PHeap);
+	pib = vnew(0, sizeof pib[0], PHeap);
 	nib = 0;
 	vbufset = 0;
 	/* the candidates first: a loop changed by an earlier one is not in the list */
@@ -2327,4 +2348,6 @@ vec(Fn *fn)
 	}
 	vfree(ib);
 	ib = 0;
+	vfree(pib);
+	pib = 0;
 }
