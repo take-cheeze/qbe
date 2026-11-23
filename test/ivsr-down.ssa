@@ -1,0 +1,31 @@
+# A count-down loop whose element address is a[i + 1] (a displaced index) with 12-byte elements (a multiply that is not
+# a shift): the induction pass gives the loop a pointer that steps down by 12, and the access is that pointer at a
+# displacement. The sum is 6 + 5 + 4 + 3.
+data $arr = { w 1, w 0, w 0, w 2, w 0, w 0, w 3, w 0, w 0, w 4, w 0, w 0, w 5, w 0, w 0, w 6, w 0, w 0 }
+export function w $test() {
+@start
+	jmp @loop
+@loop
+	%i =w phi @start 4, @latch %in
+	%s =w phi @start 0, @latch %s2
+	%c =w csgtw %i, 0
+	jnz %c, @body, @end
+@body
+	%j =w add %i, 1
+	%e =l extsw %j
+	%o =l mul %e, 12
+	%p =l add $arr, %o
+	%v =w loadsw %p
+	jmp @latch
+@latch
+	%s2 =w add %s, %v
+	%in =w sub %i, 1
+	jmp @loop
+@end
+	ret %s
+}
+
+# >>> driver
+# extern int test(void);
+# int main() { return test() != 18; }
+# <<<

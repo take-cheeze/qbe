@@ -380,7 +380,9 @@ strengthen(Fn *fn, Blk *h, Blk *P, Blk *L, uint *mark, uint stamp)
 	Use *use;
 	Tmp *t;
 	Ref init, lv, iv, mto, xto, adto[IVMAX], adbase[IVMAX], grpb[IVMAX], grpv[IVMAX], pinit, pv, pnext, t1, t2, other;
-	int64_t c, s, v, kc, i0;
+	int64_t c, s, v, kc, i0, kk, offk;
+	Ref atmp;
+	Ins *a;
 	uint bi, j, u, n, ng, g;
 	int found, isconst;
 
@@ -396,6 +398,11 @@ strengthen(Fn *fn, Blk *h, Blk *P, Blk *L, uint *mark, uint stamp)
 		d = fn->tmp[lv.val].def;
 		if (d->op == Oadd && d->cls == Kw && rtype(d->arg[0]) == RTmp && req(d->arg[0], ph->to) && ivconst(fn, d->arg[1], &s))
 			ivp = ph;
+		/* a count-down: i = i - c steps by -c */
+		else if (d->op == Osub && d->cls == Kw && rtype(d->arg[0]) == RTmp && req(d->arg[0], ph->to) && ivconst(fn, d->arg[1], &s)) {
+			s = -s;
+			ivp = ph;
+		}
 	}
 	if (!ivp || !ivphiarg(ivp, P, &init))
 		return 0;
@@ -421,8 +428,22 @@ strengthen(Fn *fn, Blk *h, Blk *P, Blk *L, uint *mark, uint stamp)
 			if (!inloop(mark, stamp, fn->rpo[fn->tmp[m->arg[0].val].bid]))
 				continue;
 			x = fn->tmp[m->arg[0].val].def;
-			if (x->op != Oextsw || x->cls != Kl || !req(x->arg[0], iv))
+			if (x->op != Oextsw || x->cls != Kl)
 				continue;
+			/* the index is i, or i + kk: the address is i's pointer at a displacement of kk * c */
+			kk = 0;
+			a = 0;
+			if (!req(x->arg[0], iv)) {
+				if (rtype(x->arg[0]) != RTmp || fn->tmp[x->arg[0].val].bid == -1u || !fn->tmp[x->arg[0].val].def)
+					continue;
+				if (!inloop(mark, stamp, fn->rpo[fn->tmp[x->arg[0].val].bid]))
+					continue;
+				a = fn->tmp[x->arg[0].val].def;
+				if (a->op != Oadd || a->cls != Kw || !req(a->arg[0], iv) || !ivconst(fn, a->arg[1], &kk))
+					continue;
+				if (c * kk != (int64_t)(int32_t)(c * kk))
+					continue;
+			}
 			/* the uses of the multiply */
 			t = &fn->tmp[m->to.val];
 			n = t->nuse;
@@ -456,6 +477,8 @@ strengthen(Fn *fn, Blk *h, Blk *P, Blk *L, uint *mark, uint stamp)
 			if (found) {
 				mto = m->to;
 				xto = x->to;
+				offk = c * kk;
+				atmp = a ? a->to : R;
 				break;
 			}
 		}
@@ -521,13 +544,25 @@ strengthen(Fn *fn, Blk *h, Blk *P, Blk *L, uint *mark, uint stamp)
 		ng++;
 	}
 	/* each add becomes its group's pointer; the multiply and the extension go when nothing reads them */
+	filluse(fn);
 	for (u=0; u<n; u++) {
 		for (g=0; g<ng; g++)
 			if (req(grpb[g], adbase[u]))
 				break;
-		renameuses(fn, adto[u], grpv[g]);
-		killdef(fn, adto[u]);
+		if (offk == 0) {
+			renameuses(fn, adto[u], grpv[g]);
+			killdef(fn, adto[u]);
+		} else {
+			/* the add of the displaced address: pointer + displacement (the load takes it in its addressing mode) */
+			Ins *ad2 = fn->tmp[adto[u].val].def;
+			ad2->op = Oadd;
+			ad2->cls = Kl;
+			ad2->arg[0] = grpv[g];
+			ad2->arg[1] = getcon(offk, fn);
+		}
 	}
+	if (offk != 0 && rtype(atmp) == RTmp && !usedanywhere(fn, atmp))
+		killdef(fn, atmp);
 	killdef(fn, mto);
 	if (!usedanywhere(fn, xto))
 		killdef(fn, xto);
