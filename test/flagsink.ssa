@@ -1,0 +1,37 @@
+# The test of a branch (and x, 1) is used only by its jump, and another instruction (b) sits between the test and the
+# jump. The selector moves the test down to the jump, so the test is the jump's flag setter: testl, not andl and cmpl.
+# The arms store, so the branch is not if-converted.
+data $g = { w 0 }
+export
+function w $test() {
+@start
+	%n =w copy 9
+	%i =w copy 0
+	%s =w copy 0
+@loop
+	%c =w csltw %i, %n
+	jnz %c, @body, @end
+@body
+	%m =w and %i, 1
+	%b =w add %i, 3
+	jnz %m, @odd, @even
+@odd
+	%s =w add %s, %b
+	storew %s, $g
+	jmp @next
+@even
+	%s =w sub %s, %b
+	storew %s, $g
+	jmp @next
+@next
+	%i =w add %i, 1
+	jmp @loop
+@end
+	%r =w loadsw $g
+	ret %r
+}
+
+# >>> driver
+# extern int test(void);
+# int main() { return test() != -7; }
+# <<<

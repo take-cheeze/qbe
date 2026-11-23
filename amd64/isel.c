@@ -614,6 +614,30 @@ Emit:
 	}
 }
 
+/* A jump on a test of r (an and, or a comparison) whose only use is the jump: the test moves down to the jump, past
+ * the instructions after it, so that it is the last flag setter (the selector fuses it with the jump). Those
+ * instructions do not use r (its only use is the jump), and SSA gives their operands the same values. */
+static void
+flagsink(Blk *b, Ref r)
+{
+	Ins *d, *end, tmp;
+	int k, c;
+
+	end = &b->ins[b->nins];
+	for (d=end; d!=b->ins;) {
+		--d;
+		if (req(d->to, r))
+			break;
+	}
+	if (d == b->ins && !req(d->to, r))
+		return;
+	if (!req(d->to, r) || (d->op != Oand && !iscmp(d->op, &k, &c)))
+		return;
+	tmp = *d;
+	memmove(d, d+1, (end - (d+1)) * sizeof *d);
+	end[-1] = tmp;
+}
+
 static Ins *
 flagi(Ins *i0, Ins *i)
 {
@@ -819,6 +843,8 @@ seljmp(Blk *b, Fn *fn)
 		b->s2 = 0;
 		return;
 	}
+	if (t->nuse == 1)
+		flagsink(b, r);
 	fi = flagi(b->ins, &b->ins[b->nins]);
 	if (!wflagi(fi, r, &k, &c)) {
 		selcmp((Ref[2]){r, CON_Z}, Kw, 0, fn);
