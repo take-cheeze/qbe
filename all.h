@@ -305,6 +305,8 @@ struct Blk {
 	   filter is in the action chain where its -K entry of ehact is, in place of the function's (Fn.ehspec) when the pad has none */
 	struct ehlist *ehspecs;
 	uint nehspecs;
+	/* nfcxx: the block is cold code (ehcoldmark, emit.c): not reached from the entry, so it is emitted in .text.unlikely */
+	char ehcold;
 };
 
 enum {
@@ -704,6 +706,9 @@ void ehlpbegin(Fn *, Blk *, FILE *);
 void ehcsbegin(Fn *, Blk *, Ins *, FILE *);
 void ehcsend(Fn *, Blk *, Ins *, FILE *);
 void ehfnend(Fn *, FILE *);
+int ehcoldmark(Fn *);
+void ehcoldbegin(Fn *, FILE *);
+Blk *ehfallnext(Blk *);
 void elf_emitfnfin(char *, FILE *);
 void elf_emitfin(FILE *);
 void macho_emitfin(FILE *);

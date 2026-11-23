@@ -953,6 +953,22 @@ sysv_framesz(E *e)
 	e->fsz = 4*f + 8*o + 176*e->fn->vararg;
 }
 
+/* the body's CFI rules, after the prologue: the rbp frame, then each pushed register's slot (the prologue's pushes, in
+   amd64_sysv_rclob order). The cold code's FDE starts with them (ehcoldbegin). */
+static void
+cfibody(E *e, FILE *f)
+{
+	Fn *fn = e->fn;
+	int *r, k;
+
+	fputs("\t.cfi_def_cfa_offset 16\n\t.cfi_offset %rbp, -16\n\t.cfi_def_cfa_register %rbp\n", f);
+	k = 0;
+	for (r=amd64_sysv_rclob; r<&amd64_sysv_rclob[NCLR_SYSV]; r++)
+		if (fn->reg & BIT(*r))
+			fprintf(f, "\t.cfi_offset %%%s, %d\n", rname[*r][0],
+				-(int)(16 + e->fsz + 8 * ++k));
+}
+
 void
 amd64_sysv_emitfn(Fn *fn, FILE *f)
 {
@@ -964,7 +980,7 @@ amd64_sysv_emitfn(Fn *fn, FILE *f)
 	static int id0;
 	Blk *b, *s;
 	Ins *i, *last, itmp;
-	int *r, c, o, n, lbl, unw;
+	int *r, c, o, n, lbl, unw, part, split;
 	uint p;
 	E *e;
 
@@ -1007,98 +1023,112 @@ amd64_sysv_emitfn(Fn *fn, FILE *f)
 					-(int)(16 + e->fsz + 8 * e->nclob));
 		}
 
-	for (lbl=0, b=fn->start; b; b=b->link) {
-		ehlpbegin(fn, b, f);
-		if (lbl || b->npred > 1) {
-			for (p=0; p<b->npred; p++)
-				if (b->pred[p]->id >= b->id)
+	/* exception tables with cold code (ehcoldmark): the hot blocks, then the cold ones in .text.unlikely, each part with
+	   its own FDE (its CFI rules are the body's: cfibody). Without cold code there is one part, as before. */
+	split = unw && ehcoldmark(fn);
+	for (part=0; part<=split; part++) {
+		if (part) {
+			ehcoldbegin(fn, f);
+			cfibody(e, f);
+		}
+		for (lbl=part, b=fn->start; b; b=b->link) {
+			if (split && b->ehcold != part)
+				continue;
+			ehlpbegin(fn, b, f);
+			if (lbl || b->npred > 1) {
+				for (p=0; p<b->npred; p++)
+					if (b->pred[p]->id >= b->id)
+						break;
+				if (p != b->npred)
+					fprintf(f, ".p2align 4\n");
+				fprintf(f, "%sbb%d:\n", T.asloc, id0+b->id);
+			}
+			/* a tail call (sysv.c tailcallok): the block's last instruction is its call, which the epilogue precedes */
+			last = b->tail && b->jmp.type == Jret0 && b->nins && b->ins[b->nins-1].op == Ocall
+				&& tailtarget(&b->ins[b->nins-1]) ? &b->ins[b->nins-1] : 0;
+			for (i=b->ins; i!=&b->ins[b->nins]; i++) {
+				if (i == last)
 					break;
-			if (p != b->npred)
-				fprintf(f, ".p2align 4\n");
-			fprintf(f, "%sbb%d:\n", T.asloc, id0+b->id);
-		}
-		/* a tail call (sysv.c tailcallok): the block's last instruction is its call, which the epilogue precedes */
-		last = b->tail && b->jmp.type == Jret0 && b->nins && b->ins[b->nins-1].op == Ocall
-			&& tailtarget(&b->ins[b->nins-1]) ? &b->ins[b->nins-1] : 0;
-		for (i=b->ins; i!=&b->ins[b->nins]; i++) {
-			if (i == last)
+				if (i->op == Ocall)
+					ehcsbegin(fn, b, i, f);
+				emitins(*i, e);
+				if (i->op == Ocall)
+					ehcsend(fn, b, i, f);
+			}
+			lbl = 1;
+			switch (b->jmp.type) {
+			case Jhlt:
+				fprintf(f, "\tud2\n");
 				break;
-			if (i->op == Ocall)
-				ehcsbegin(fn, b, i, f);
-			emitins(*i, e);
-			if (i->op == Ocall)
-				ehcsend(fn, b, i, f);
-		}
-		lbl = 1;
-		switch (b->jmp.type) {
-		case Jhlt:
-			fprintf(f, "\tud2\n");
-			break;
-		case Jret0:
-			/* The epilogue changes the CFA rules; the body's rules are restored after the ret. */
-			if (unw)
-				fputs("\t.cfi_remember_state\n", f);
-			if (fn->dynalloc)
-				fprintf(f,
-					"\tmovq %%rbp, %%rsp\n"
-					"\tsubq $%"PRIu64", %%rsp\n",
-					e->fsz + e->nclob * 8);
-			for (r=&amd64_sysv_rclob[NCLR_SYSV]; r>amd64_sysv_rclob;)
-				if (fn->reg & BIT(*--r)) {
-					itmp.arg[0] = TMP(*r);
-					emitf("popq %L0", &itmp, e);
+			case Jret0:
+				/* The epilogue changes the CFA rules; the body's rules are restored after the ret. */
+				if (unw)
+					fputs("\t.cfi_remember_state\n", f);
+				if (fn->dynalloc)
+					fprintf(f,
+						"\tmovq %%rbp, %%rsp\n"
+						"\tsubq $%"PRIu64", %%rsp\n",
+						e->fsz + e->nclob * 8);
+				for (r=&amd64_sysv_rclob[NCLR_SYSV]; r>amd64_sysv_rclob;)
+					if (fn->reg & BIT(*--r)) {
+						itmp.arg[0] = TMP(*r);
+						emitf("popq %L0", &itmp, e);
+					}
+				if (e->fp == RBP)
+					fputs("\tleave\n", f);
+				else if (e->fsz)
+					fprintf(f,
+						"\taddq $%"PRIu64", %%rsp\n",
+						e->fsz);
+				if (last) {	/* the tail call: its jump takes the return's place */
+					e->tail = 1;
+					emitins(*last, e);
+					e->tail = 0;
+				} else {
+					if (e->fn->widevec)
+						fputs("\tvzeroupper\n", f);	/* the upper halves of the ymm registers are not the callee's */
+					fputs("\tret\n", f);
 				}
-			if (e->fp == RBP)
-				fputs("\tleave\n", f);
-			else if (e->fsz)
-				fprintf(f,
-					"\taddq $%"PRIu64", %%rsp\n",
-					e->fsz);
-			if (last) {	/* the tail call: its jump takes the return's place */
-				e->tail = 1;
-				emitins(*last, e);
-				e->tail = 0;
-			} else {
-				if (e->fn->widevec)
-					fputs("\tvzeroupper\n", f);	/* the upper halves of the ymm registers are not the callee's */
-				fputs("\tret\n", f);
+				if (unw)
+					fputs("\t.cfi_restore_state\n", f);
+				break;
+			case Jjmp:
+			Jmp:
+				if (b->s1 != ehfallnext(b))
+					fprintf(f, "\tjmp %sbb%d\n",
+						T.asloc, id0+b->s1->id);
+				else
+					lbl = 0;
+				break;
+			case Jjtab:
+				emitjtab(b, id0, e);
+				break;
+			default:
+				c = b->jmp.type - Jjf;
+				if (0 <= c && c <= NCmp) {
+					if (ehfallnext(b) == b->s2) {
+						s = b->s1;
+						b->s1 = b->s2;
+						b->s2 = s;
+						n = 0;
+					} else
+						n = 1;
+					fprintf(f, "\tj%s %sbb%d\n", ctoa[c][n],
+						T.asloc, id0+b->s2->id);
+					goto Jmp;
+				}
+				die("unhandled jump %d", b->jmp.type);
 			}
-			if (unw)
-				fputs("\t.cfi_restore_state\n", f);
-			break;
-		case Jjmp:
-		Jmp:
-			if (b->s1 != b->link)
-				fprintf(f, "\tjmp %sbb%d\n",
-					T.asloc, id0+b->s1->id);
-			else
-				lbl = 0;
-			break;
-		case Jjtab:
-			emitjtab(b, id0, e);
-			break;
-		default:
-			c = b->jmp.type - Jjf;
-			if (0 <= c && c <= NCmp) {
-				if (b->link == b->s2) {
-					s = b->s1;
-					b->s1 = b->s2;
-					b->s2 = s;
-					n = 0;
-				} else
-					n = 1;
-				fprintf(f, "\tj%s %sbb%d\n", ctoa[c][n],
-					T.asloc, id0+b->s2->id);
-				goto Jmp;
-			}
-			die("unhandled jump %d", b->jmp.type);
 		}
+		/* the part's FDE ends here: the hot one before the cold part begins (which ends with .text) */
+		if (unw)
+			fputs("\t.cfi_endproc\n", f);
+		if (part)
+			fputs("\t.text\n", f);
+		else if (!T.apple)
+			elf_emitfnfin(fn->name, f);
 	}
 	id0 += fn->nblk;
-	if (unw)
-		fputs("\t.cfi_endproc\n", f);
-	if (!T.apple)
-		elf_emitfnfin(fn->name, f);
 	emitjtabs(fn, id0 - fn->nblk, e);
 	ehfnend(fn, f);
 }

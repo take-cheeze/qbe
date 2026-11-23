@@ -80,6 +80,8 @@ static int ehcsskip;               /* the call being emitted is of a nothrow cal
 static Blk **ehcslp;               /* exception tables: the landing pad of each call site (0: none) */
 static uint nehcsv, ehcsvcap;
 static int ehtabon;                /* the current function has exception tables (an LSDA) */
+static int ehcolds;               /* the current function has cold code (ehcoldmark): a second FDE and LSDA */
+static char *ehcscold;            /* and each call site is in the cold code (1) or the hot code (0) */
 
 static int
 ehneedtab(Fn *fn)
@@ -93,6 +95,7 @@ ehfnbegin(Fn *fn, FILE *f)
 	char pers[64];
 
 	ehtabon = 0;
+	ehcolds = 0;
 	/* a leaf makes no call: nothing unwinds through it, and the target writes no CFI for it */
 	if (!fn->eh_lp && (!ehneedtab(fn) || fn->leaf))
 		return;
@@ -128,6 +131,87 @@ ehlpbegin(Fn *fn, Blk *b, FILE *f)
 	}
 	if (b == fn->eh_lp)
 		fprintf(f, "%sEHlp%u:\n", T.asloc, ehcur);
+}
+
+/* Cold code (nfcxx; gap 9 of the zero-cost EH notes, as gcc's .text.unlikely). A landing pad is entered only by the
+   unwinder, so with exception tables the blocks the entry does not reach (the pads, and the blocks only they reach) are
+   emitted after the hot code, in .text.unlikely, with an FDE and an LSDA of their own. The LSDAs then have LPStart: the
+   cold code's start, which every landing pad is an offset from (a hot call's pad is cold too). Only on ELF, where the
+   FDE and the LSDA are the ones written here. Returns 1 when the function has cold code. */
+int
+ehcoldmark(Fn *fn)
+{
+	Blk *b, **stk, *s;
+	uint nb, nst, k;
+
+	ehcolds = 0;
+	for (nb=0, b=fn->start; b; b=b->link) {
+		b->ehcold = 1;
+		nb++;
+	}
+	if (T.apple || !ehtabon || !fn->nehpad)
+		return 0;
+	stk = malloc(nb * sizeof stk[0]);
+	if (!stk)
+		die("out of memory");
+	nst = 0;
+	fn->start->ehcold = 0;
+	stk[nst++] = fn->start;
+	while (nst) {
+		b = stk[--nst];
+		for (uint j=0; j<=(b->jmp.type == Jjtab ? b->ntab : 0); j++) {
+			s = j == 0 ? b->s1 : b->tab[j-1];
+			if (s && s->ehcold) {
+				s->ehcold = 0;
+				stk[nst++] = s;
+			}
+		}
+		s = b->s2;
+		if (s && s->ehcold) {
+			s->ehcold = 0;
+			stk[nst++] = s;
+		}
+	}
+	free(stk);
+	/* a pad the entry reaches is hot: its offset from the cold code would cross sections, so no cold code */
+	for (k=0; k<fn->nehpad; k++)
+		if (!fn->ehpads[k]->ehcold)
+			return 0;
+	ehcolds = 1;
+	return 1;
+}
+
+/* the block emitted after b: with cold code, the next block of its own section (a fall-through needs both in one) */
+Blk *
+ehfallnext(Blk *b)
+{
+	Blk *s = b->link;
+
+	if (ehcolds)
+		while (s && s->ehcold != b->ehcold)
+			s = s->link;
+	return s;
+}
+
+/* the cold code's FDE begins (ehcoldmark): its section, its start (the LSDA's base for the call sites in it), and the
+   personality and LSDA as the hot FDE's; the body's CFI rules follow (the target writes them). A call site does not
+   extend across the start: the hot code's last call and the cold code's first have no site in common. */
+void
+ehcoldbegin(Fn *fn, FILE *f)
+{
+	(void)fn;
+	/* the byte after the base (int3, never run): the FDE starts at the base, and a landing pad at offset 0 from LPStart
+	   would read as no pad (an offset of 0 is none) */
+	fprintf(f,
+		"\t.section .text.unlikely,\"ax\",@progbits\n"
+		"%sEHfsc%u:\n"
+		"\t.cfi_startproc\n"
+		"\t.cfi_personality 0x9b, DW.ref.__gxx_personality_v0\n"
+		"\t.cfi_lsda 0x1b, %sEHLc%u\n"
+		"\t.byte 0xcc\n",
+		T.asloc, ehcur, T.asloc, ehcur
+	);
+	ehcsbrk = 1;
 }
 
 /* the landing pad of a call of b (exception tables), or -1 when the call has no call site entry */
@@ -202,11 +286,13 @@ ehcsbegin(Fn *fn, Blk *b, Ins *i, FILE *f)
 	if (nehcsv == ehcsvcap) {
 		ehcsvcap = ehcsvcap ? 2 * ehcsvcap : 16;
 		ehcsv = realloc(ehcsv, ehcsvcap * sizeof ehcsv[0]);
+		ehcscold = realloc(ehcscold, ehcsvcap * sizeof ehcscold[0]);
 		ehcsve = realloc(ehcsve, ehcsvcap * sizeof ehcsve[0]);
 		ehcslp = realloc(ehcslp, ehcsvcap * sizeof ehcslp[0]);
-		if (!ehcsv || !ehcsve || !ehcslp)
+		if (!ehcsv || !ehcsve || !ehcslp || !ehcscold)
 			die("out of memory");
 	}
+	ehcscold[nehcsv] = ehcolds && b->ehcold;
 	ehcslp[nehcsv] = lp;
 	ehcsve[nehcsv] = ehcscur;
 	ehcsv[nehcsv++] = ehcscur;
@@ -272,14 +358,21 @@ ehpadspec(Fn *fn, Blk *lp)
 	return lp->nehspecs || fn->nehspec;
 }
 
+/* One LSDA of the function: the hot one (cold 0), or the cold one (cold 1, with ehcolds), whose labels carry the suffix
+   "c". A region's base is its FDE's start: the hot code's, or the cold code's (EHfsc). With cold code every LSDA has
+   LPStart, the cold code's start (pcrel): the landing pads are cold, and a hot call's pad is an offset from it too. */
 static void
-ehtabend(Fn *fn, FILE *f)
+ehtabpart(Fn *fn, FILE *f, int cold)
 {
 	uint k, c, t, j, nrec, rec;
 	Blk *lp;
 	int types, anyspec;
 	char *L = T.asloc;   /* the local label prefix: ".L" (ELF), "L" (Mach-O, where only L names are assembler-local) */
+	const char *s = cold ? "c" : "";
+	char rb[32], lb[32];
 
+	snprintf(rb, sizeof rb, "%sEHfs%s%u", L, s, ehcur);
+	snprintf(lb, sizeof lb, "%sEHfs%s%u", L, ehcolds ? "c" : "", ehcur);
 	anyspec = fn->nehspec != 0;
 	for (k=0; k<fn->nehpad; k++)
 		anyspec |= fn->ehpads[k]->nehspecs != 0;
@@ -292,53 +385,55 @@ ehtabend(Fn *fn, FILE *f)
 		fprintf(f, "\t.p2align 2, 0x0\nGCC_except_table%u:\n", ehcur);
 	else
 		fputs("\t.p2align 2\n", f);
-	fprintf(f,
-		"%sEHL%u:\n"
-		"\t.byte 0xff\n",         /* no LPStart: the pads are offsets from the function */
-		L, ehcur
-	);
+	fprintf(f, "%sEHL%s%u:\n", L, s, ehcur);
+	if (ehcolds)
+		fprintf(f, "\t.byte 0x1b\n\t.long %s-.\n", lb);   /* LPStart: pcrel sdata4, the cold code's start */
+	else
+		fputs("\t.byte 0xff\n", f);          /* no LPStart: the pads are offsets from the function */
 	if (types)
 		fprintf(f,
 			"\t.byte 0x9b\n"   /* types: DW_EH_PE_indirect | pcrel | sdata4 (DW.ref, or the GOT entry on Mach-O) */
-			"\t.uleb128 %sEHTT%u-%sEHTTb%u\n"
-			"%sEHTTb%u:\n",
-			L, ehcur, L, ehcur, L, ehcur
+			"\t.uleb128 %sEHTT%s%u-%sEHTTb%s%u\n"
+			"%sEHTTb%s%u:\n",
+			L, s, ehcur, L, s, ehcur, L, s, ehcur
 		);
 	else
 		fputs("\t.byte 0xff\n", f);
 	fprintf(f,
 		"\t.byte 0x01\n"          /* call sites: uleb128 */
-		"\t.uleb128 %sEHCTe%u-%sEHCTb%u\n"
-		"%sEHCTb%u:\n",
-		L, ehcur, L, ehcur, L, ehcur
+		"\t.uleb128 %sEHCTe%s%u-%sEHCTb%s%u\n"
+		"%sEHCTb%s%u:\n",
+		L, s, ehcur, L, s, ehcur, L, s, ehcur
 	);
 	for (k=0; k<nehcsv; k++) {
+		if (ehcscold[k] != cold)
+			continue;
 		c = ehcsv[k];
 		lp = ehcslp[k];
 		fprintf(f,
-			"\t.uleb128 %sEHcsb%u-%sEHfs%u\n"
+			"\t.uleb128 %sEHcsb%u-%s\n"
 			"\t.uleb128 %sEHcse%u-%sEHcsb%u\n",
-			L, c, L, ehcur, L, ehcsve[k], L, c
+			L, c, rb, L, ehcsve[k], L, c
 		);
 		if (!lp)
 			fputs("\t.uleb128 0\n\t.uleb128 0\n", f);
 		else if (!lp->nehact && !ehpadspec(fn, lp))
-			fprintf(f, "\t.uleb128 %sEHp%u_%u-%sEHfs%u\n\t.uleb128 0\n", L, ehcur, lp->id, L, ehcur);
+			fprintf(f, "\t.uleb128 %sEHp%u_%u-%s\n\t.uleb128 0\n", L, ehcur, lp->id, lb);
 		else
 			fprintf(f,
-				"\t.uleb128 %sEHp%u_%u-%sEHfs%u\n"
-				"\t.uleb128 %sEHA%u_%u-%sEHAT%u+1\n",
-				L, ehcur, lp->id, L, ehcur, L, ehcur, lp->id, L, ehcur
+				"\t.uleb128 %sEHp%u_%u-%s\n"
+				"\t.uleb128 %sEHA%s%u_%u-%sEHAT%s%u+1\n",
+				L, ehcur, lp->id, lb, L, s, ehcur, lp->id, L, s, ehcur
 			);
 	}
 	/* the action table: for each pad with catch clauses, one record per clause (its type id, then the offset to the
 	   next record, 1 as it follows), and a cleanup record (filter 0) last when the pad also runs cleanups */
-	fprintf(f, "%sEHCTe%u:\n%sEHAT%u:\n", L, ehcur, L, ehcur);
+	fprintf(f, "%sEHCTe%s%u:\n%sEHAT%s%u:\n", L, s, ehcur, L, s, ehcur);
 	for (k=0; k<fn->nehpad; k++) {
 		lp = fn->ehpads[k];
 		if (!lp->nehact && !ehpadspec(fn, lp))
 			continue;
-		fprintf(f, "%sEHA%u_%u:\n", L, ehcur, lp->id);
+		fprintf(f, "%sEHA%s%u_%u:\n", L, s, ehcur, lp->id);
 		/* the records in order: the clauses, and the filters (-K: the pad's list K, at its place in the chain), the
 		   function's filter when the pad has no list of its own, then the cleanup. Each record is two bytes: its next
 		   offset is 1 when another record follows */
@@ -346,7 +441,7 @@ ehtabend(Fn *fn, FILE *f)
 		rec = 0;
 		for (t=0; t<lp->nehact; t++) {
 			if (lp->ehact[t] < 0)   /* the filter is the negative of its list's offset after EHTT, less 1 */
-				fprintf(f, "\t.sleb128 %sEHTT%u-%sEHSP%u_%u_%d-1\n", L, ehcur, L, ehcur, lp->id, -lp->ehact[t]);
+				fprintf(f, "\t.sleb128 %sEHTT%s%u-%sEHSP%s%u_%u_%d-1\n", L, s, ehcur, L, s, ehcur, lp->id, -lp->ehact[t]);
 			else
 				fprintf(f, "\t.sleb128 %d\n", lp->ehact[t]);
 			fprintf(f, "\t.sleb128 %d\n", ++rec < nrec ? 1 : 0);
@@ -358,7 +453,6 @@ ehtabend(Fn *fn, FILE *f)
 		if (lp->ehclean)
 			fputs("\t.sleb128 0\n\t.sleb128 0\n", f);
 	}
-	/* the types table, last entry first: type id N is the N-th entry before EHTT */
 	if (types) {
 		fputs("\t.p2align 2\n", f);
 		for (t=fn->nehty-1; t>=1; t--)
@@ -369,7 +463,7 @@ ehtabend(Fn *fn, FILE *f)
 					L, ehcur, t, T.assym, fn->ehty[t], L, ehcur, t);
 			else
 				fprintf(f, "\t.long DW.ref.%s-.\n", fn->ehty[t]);
-		fprintf(f, "%sEHTT%u:\n", L, ehcur);
+		fprintf(f, "%sEHTT%s%u:\n", L, s, ehcur);
 		/* the exception specification lists: their type ids, 0 at the end; the function's, then each pad's own */
 		if (fn->nehspec) {
 			for (t=0; t<fn->nehspec; t++)
@@ -379,13 +473,23 @@ ehtabend(Fn *fn, FILE *f)
 		for (k=0; k<fn->nehpad; k++) {
 			lp = fn->ehpads[k];
 			for (j=0; j<lp->nehspecs; j++) {
-				fprintf(f, "%sEHSP%u_%u_%u:\n", L, ehcur, lp->id, j+1);
+				fprintf(f, "%sEHSP%s%u_%u_%u:\n", L, s, ehcur, lp->id, j+1);
 				for (t=0; t<lp->ehspecs[j].n; t++)
 					fprintf(f, "\t.uleb128 %d\n", lp->ehspecs[j].ids[t]);
 				fputs("\t.uleb128 0\n", f);
 			}
 		}
 	}
+}
+
+static void
+ehtabend(Fn *fn, FILE *f)
+{
+	uint t;
+
+	ehtabpart(fn, f, 0);
+	if (ehcolds)
+		ehtabpart(fn, f, 1);
 	fputs("\t.text\n", f);
 	ehdwref("__gxx_personality_v0", f);
 	for (t=1; t<fn->nehty; t++)
