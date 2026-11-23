@@ -114,6 +114,10 @@ func(Fn *fn)
 	filluse(fn);
 	if (vectorize)
 		vec(fn);
+	fillcfg(fn);
+	filluse(fn);
+	filldom(fn);
+	ivsr(fn);
 	T.isel(fn);
 	fillcfg(fn);
 	filllive(fn);

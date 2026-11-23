@@ -674,6 +674,7 @@ void gvn(Fn *);
 int pinned(Ins *);
 void gcm(Fn *);
 void licm(Fn *);
+void ivsr(Fn *);   /* loop strength reduction of addresses (licm.c, nfcxx) */
 
 /* ifopt.c */
 void ifconvert(Fn *fn);
