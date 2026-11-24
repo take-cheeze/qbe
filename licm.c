@@ -370,6 +370,51 @@ killdef(Fn *fn, Ref r)
 			}
 }
 
+/* the index a = iv * c0 + q (a w add of an invariant q and iv or a constant multiple of it, in either order):
+   1 with c0 and q (and the multiply's temporary in *pt, R when iv itself is added), 0 otherwise */
+static int
+ivterm(Fn *fn, uint *mark, uint stamp, Ins *a, Ref iv, int64_t *c0, Ref *q, Ref *pt)
+{
+	Ref pr, qr;
+	Ins *p;
+	int64_t kc;
+	int e;
+
+	if (a->op != Oadd || a->cls != Kw)
+		return 0;
+	for (e=0; e<2; e++) {
+		pr = a->arg[e];
+		qr = a->arg[1-e];
+		if (rtype(qr) != RTmp || !invariantref(fn, mark, stamp, qr))
+			continue;
+		if (req(pr, iv)) {
+			*c0 = 1;
+			*q = qr;
+			*pt = R;
+			return 1;
+		}
+		if (rtype(pr) != RTmp || fn->tmp[pr.val].bid == -1u || !fn->tmp[pr.val].def)
+			continue;
+		if (!inloop(mark, stamp, fn->rpo[fn->tmp[pr.val].bid]))
+			continue;
+		p = fn->tmp[pr.val].def;
+		if ((p->op != Omul && p->op != Oshl) || p->cls != Kw || !req(p->arg[0], iv) || !ivconst(fn, p->arg[1], &kc))
+			continue;
+		if (p->op == Oshl) {
+			if (kc < 0 || kc > 30)
+				continue;
+			kc = (int64_t)1 << kc;
+		}
+		if (kc <= 0)
+			continue;
+		*c0 = kc;
+		*q = qr;
+		*pt = pr;
+		return 1;
+	}
+	return 0;
+}
+
 /* one chain of the loop with header h (entry P, latch L): 1 if it was rewritten, 0 if none qualifies */
 static int
 strengthen(Fn *fn, Blk *h, Blk *P, Blk *L, uint *mark, uint stamp)
@@ -382,6 +427,9 @@ strengthen(Fn *fn, Blk *h, Blk *P, Blk *L, uint *mark, uint stamp)
 	Ref init, lv, iv, mto, xto, adto[IVMAX], adbase[IVMAX], grpb[IVMAX], grpv[IVMAX], pinit, pv, pnext, t1, t2, other;
 	int64_t c, s, v, kc, i0, kk, offk;
 	Ref atmp;
+	int64_t c0, sc;
+	Ref qv, pt, tb;
+	int mode2;
 	Ins *a;
 	uint bi, j, u, n, ng, g;
 	int found, isconst;
@@ -433,16 +481,27 @@ strengthen(Fn *fn, Blk *h, Blk *P, Blk *L, uint *mark, uint stamp)
 			/* the index is i, or i + kk: the address is i's pointer at a displacement of kk * c */
 			kk = 0;
 			a = 0;
+			c0 = 1;
+			qv = R;
+			pt = R;
+			mode2 = 0;
 			if (!req(x->arg[0], iv)) {
 				if (rtype(x->arg[0]) != RTmp || fn->tmp[x->arg[0].val].bid == -1u || !fn->tmp[x->arg[0].val].def)
 					continue;
 				if (!inloop(mark, stamp, fn->rpo[fn->tmp[x->arg[0].val].bid]))
 					continue;
 				a = fn->tmp[x->arg[0].val].def;
-				if (a->op != Oadd || a->cls != Kw || !req(a->arg[0], iv) || !ivconst(fn, a->arg[1], &kk))
-					continue;
-				if (c * kk != (int64_t)(int32_t)(c * kk))
-					continue;
+				if (a->op == Oadd && a->cls == Kw && req(a->arg[0], iv) && ivconst(fn, a->arg[1], &kk)) {
+					if (c * kk != (int64_t)(int32_t)(c * kk))
+						continue;
+				} else {
+					/* the index is iv * c0 + q with q invariant: the base moves by c * q and the step is c * c0 * s */
+					if (!ivterm(fn, mark, stamp, a, iv, &c0, &qv, &pt))
+						continue;
+					if (c * c0 != (int64_t)(int32_t)(c * c0))
+						continue;
+					mode2 = 1;
+				}
 			}
 			/* the uses of the multiply */
 			t = &fn->tmp[m->to.val];
@@ -498,6 +557,17 @@ strengthen(Fn *fn, Blk *h, Blk *P, Blk *L, uint *mark, uint stamp)
 	for (u=1; u<n; u++)
 		if (!req(adbase[u], adbase[0]))
 			return 0;
+	sc = c * c0;
+	if (mode2) {
+		t1 = newtmp("ivsr", Kl, fn);
+		appendins(P, (Ins){Oextsw, Kl, t1, {qv, R}});
+		t2 = newtmp("ivsr", Kl, fn);
+		appendins(P, (Ins){Omul, Kl, t2, {t1, getcon(c, fn)}});
+		tb = newtmp("ivsr", Kl, fn);
+		appendins(P, (Ins){Oadd, Kl, tb, {adbase[0], t2}});
+		for (u=0; u<n; u++)
+			adbase[u] = tb;
+	}
 	ng = 0;
 	for (u=0; u<n; u++) {
 		for (g=0; g<ng; g++)
@@ -509,7 +579,7 @@ strengthen(Fn *fn, Blk *h, Blk *P, Blk *L, uint *mark, uint stamp)
 		pv = newtmp("ivsr", Kl, fn);
 		grpv[ng] = pv;
 		if (isconst) {
-			v = i0 * c;
+			v = i0 * sc;
 			if (v == 0)
 				pinit = grpb[ng];
 			else {
@@ -519,16 +589,16 @@ strengthen(Fn *fn, Blk *h, Blk *P, Blk *L, uint *mark, uint stamp)
 		} else {
 			t1 = newtmp("ivsr", Kl, fn);
 			appendins(P, (Ins){Oextsw, Kl, t1, {init, R}});
-			if (c != 1) {
+			if (sc != 1) {
 				t2 = newtmp("ivsr", Kl, fn);
-				appendins(P, (Ins){Omul, Kl, t2, {t1, getcon(c, fn)}});
+				appendins(P, (Ins){Omul, Kl, t2, {t1, getcon(sc, fn)}});
 				t1 = t2;
 			}
 			pinit = newtmp("ivsr", Kl, fn);
 			appendins(P, (Ins){Oadd, Kl, pinit, {grpb[ng], t1}});
 		}
 		pnext = newtmp("ivsr", Kl, fn);
-		appendins(L, (Ins){Oadd, Kl, pnext, {pv, getcon(c * s, fn)}});
+		appendins(L, (Ins){Oadd, Kl, pnext, {pv, getcon(sc * s, fn)}});
 		np = vnew(1, sizeof np[0], PFn);
 		np->to = pv;
 		np->cls = Kl;
@@ -566,6 +636,12 @@ strengthen(Fn *fn, Blk *h, Blk *P, Blk *L, uint *mark, uint stamp)
 	killdef(fn, mto);
 	if (!usedanywhere(fn, xto))
 		killdef(fn, xto);
+	if (mode2) {
+		if (!usedanywhere(fn, a->to))
+			killdef(fn, a->to);
+		if (rtype(pt) == RTmp && !usedanywhere(fn, pt))
+			killdef(fn, pt);
+	}
 	dropnops(fn);
 	filluse(fn);
 	return 1;

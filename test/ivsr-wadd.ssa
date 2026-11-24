@@ -1,0 +1,33 @@
+# The element index is computed in 32 bits, k * 3 + j with j loop-invariant, and sign-extended before the address
+# (the form of a[k * 3 + j] in C). The induction pass gives the loop a pointer that steps by 12 (= 4 * 3) from the
+# entry's j-displaced base; the 32-bit multiply and add go when nothing reads them. The elements are a[i] = i + 1 and
+# the access is a[k * 3 + 1] for k = 0..3: 2 + 5 + 8 + 11.
+data $arr = { w 1, w 2, w 3, w 4, w 5, w 6, w 7, w 8, w 9, w 10, w 11, w 12 }
+export function w $test(w %j) {
+@start
+	jmp @loop
+@loop
+	%k =w phi @start 0, @latch %k2
+	%s =w phi @start 0, @latch %s2
+	%c =w csltw %k, 4
+	jnz %c, @body, @end
+@body
+	%m =w mul %k, 3
+	%w =w add %m, %j
+	%e =l extsw %w
+	%o =l mul %e, 4
+	%p =l add $arr, %o
+	%v =w loadsw %p
+	jmp @latch
+@latch
+	%s2 =w add %s, %v
+	%k2 =w add %k, 1
+	jmp @loop
+@end
+	ret %s
+}
+
+# >>> driver
+# extern int test(int);
+# int main() { return test(1) != 26; }
+# <<<
