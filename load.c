@@ -426,6 +426,34 @@ icmp(const void *pa, const void *pb)
 	return a->num - b->num;
 }
 
+/* a load whose value is a constant (a stored constant, forwarded): the extension
+ * is folded here, since no later pass folds it, and an extension of an immediate
+ * is not an instruction the backend can encode */
+static int
+loadconst(Ins *i)
+{
+	Con *c;
+	int64_t v;
+	int sz, sgn;
+
+	if (rtype(i->arg[1]) != RCon)
+		return 0;
+	c = &curf->con[i->arg[1].val];
+	if (c->type != CBits)
+		return 0;
+	sz = loadsz(i);
+	sgn = i->op == Oloadsb || i->op == Oloadsh || i->op == Oloadsw;
+	v = c->bits.i & MASK(sz);
+	if (sgn && sz < 8 && (v & BIT(8*sz-1)))
+		v |= ~MASK(sz);
+	if (i->cls == Kw)
+		v = (uint32_t)v;
+	i->op = Ocopy;
+	i->arg[0] = getcon(v, curf);
+	i->arg[1] = R;
+	return 1;
+}
+
 /* require rpo ssa alias */
 void
 loadopt(Fn *fn)
@@ -472,7 +500,8 @@ loadopt(Fn *fn)
 					break;
 				i = &b->ins[ni++];
 				if (isload(i->op)
-				&& !req(i->arg[1], R)) {
+				&& !req(i->arg[1], R)
+				&& !loadconst(i)) {
 					ext = Oextsb + i->op - Oloadsb;
 					switch (i->op) {
 					default:

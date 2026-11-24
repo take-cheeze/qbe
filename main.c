@@ -99,6 +99,10 @@ func(Fn *fn)
 	filldom(fn);
 	gcm(fn);
 	filluse(fn);
+	filldom(fn);
+	fillalias(fn);
+	loadopt(fn);
+	filluse(fn);
 	licm(fn);
 	filluse(fn);
 	ssacheck(fn);
