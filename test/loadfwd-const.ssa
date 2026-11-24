@@ -1,0 +1,27 @@
+# A load that loadopt forwards from a stored constant becomes an extension of that constant. The extension is
+# folded there (no later pass folds it), so the result is the constant itself: a byte store of 255 read back by
+# an unsigned byte load is 255, by a signed byte load -1, and a word store of -5 read back by a signed word load
+# into an l temporary is -5. The result is 1 when all three hold.
+data $bg = { b 0 }
+data $wg = align 4 { w 0 }
+
+export function w $fwdconst() {
+@start
+	storeb 255, $bg
+	%a =w loadub $bg
+	%b =w loadsb $bg
+	storew -5, $wg
+	%c =l loadsw $wg
+	%t1 =w add %a, %b
+	%ok1 =w ceqw %t1, 254
+	%ok2 =l ceql %c, -5
+	%ok =w and %ok1, %ok2
+	ret %ok
+}
+
+# >>> driver
+# extern int fwdconst(void);
+# int main() {
+#     return fwdconst() == 1 ? 0 : 1;
+# }
+# <<<

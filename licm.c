@@ -370,6 +370,51 @@ killdef(Fn *fn, Ref r)
 			}
 }
 
+/* the index a = iv * c0 + q (a w add of an invariant q and iv or a constant multiple of it, in either order):
+   1 with c0 and q (and the multiply's temporary in *pt, R when iv itself is added), 0 otherwise */
+static int
+ivterm(Fn *fn, uint *mark, uint stamp, Ins *a, Ref iv, int64_t *c0, Ref *q, Ref *pt)
+{
+	Ref pr, qr;
+	Ins *p;
+	int64_t kc;
+	int e;
+
+	if (a->op != Oadd || a->cls != Kw)
+		return 0;
+	for (e=0; e<2; e++) {
+		pr = a->arg[e];
+		qr = a->arg[1-e];
+		if (rtype(qr) != RTmp || !invariantref(fn, mark, stamp, qr))
+			continue;
+		if (req(pr, iv)) {
+			*c0 = 1;
+			*q = qr;
+			*pt = R;
+			return 1;
+		}
+		if (rtype(pr) != RTmp || fn->tmp[pr.val].bid == -1u || !fn->tmp[pr.val].def)
+			continue;
+		if (!inloop(mark, stamp, fn->rpo[fn->tmp[pr.val].bid]))
+			continue;
+		p = fn->tmp[pr.val].def;
+		if ((p->op != Omul && p->op != Oshl) || p->cls != Kw || !req(p->arg[0], iv) || !ivconst(fn, p->arg[1], &kc))
+			continue;
+		if (p->op == Oshl) {
+			if (kc < 0 || kc > 30)
+				continue;
+			kc = (int64_t)1 << kc;
+		}
+		if (kc <= 0)
+			continue;
+		*c0 = kc;
+		*q = qr;
+		*pt = pr;
+		return 1;
+	}
+	return 0;
+}
+
 /* one chain of the loop with header h (entry P, latch L): 1 if it was rewritten, 0 if none qualifies */
 static int
 strengthen(Fn *fn, Blk *h, Blk *P, Blk *L, uint *mark, uint stamp)
@@ -380,8 +425,17 @@ strengthen(Fn *fn, Blk *h, Blk *P, Blk *L, uint *mark, uint stamp)
 	Use *use;
 	Tmp *t;
 	Ref init, lv, iv, mto, xto, adto[IVMAX], adbase[IVMAX], grpb[IVMAX], grpv[IVMAX], pinit, pv, pnext, t1, t2, other;
-	int64_t c, s, v, kc, i0;
-	uint bi, j, u, n, ng, g;
+	int64_t c, s, v, kc, i0, kk, offk;
+	Ref atmp;
+	int64_t c0, sc;
+	Ref qv, pt, tb;
+	int mode2;
+	Ins *oadd[IVMAX], *ch[4], cl[IVMAX][4], *c2;
+	Blk *oblk[IVMAX], *ub;
+	Ref cto[4];
+	uint nout, ncl[IVMAX], nch, j2, k2, q2, m2;
+	Ins *a;
+	uint bi, j, u, n, nin, ng, g;
 	int found, isconst;
 
 	filluse(fn);
@@ -396,6 +450,11 @@ strengthen(Fn *fn, Blk *h, Blk *P, Blk *L, uint *mark, uint stamp)
 		d = fn->tmp[lv.val].def;
 		if (d->op == Oadd && d->cls == Kw && rtype(d->arg[0]) == RTmp && req(d->arg[0], ph->to) && ivconst(fn, d->arg[1], &s))
 			ivp = ph;
+		/* a count-down: i = i - c steps by -c */
+		else if (d->op == Osub && d->cls == Kw && rtype(d->arg[0]) == RTmp && req(d->arg[0], ph->to) && ivconst(fn, d->arg[1], &s)) {
+			s = -s;
+			ivp = ph;
+		}
 	}
 	if (!ivp || !ivphiarg(ivp, P, &init))
 		return 0;
@@ -421,17 +480,44 @@ strengthen(Fn *fn, Blk *h, Blk *P, Blk *L, uint *mark, uint stamp)
 			if (!inloop(mark, stamp, fn->rpo[fn->tmp[m->arg[0].val].bid]))
 				continue;
 			x = fn->tmp[m->arg[0].val].def;
-			if (x->op != Oextsw || x->cls != Kl || !req(x->arg[0], iv))
+			if (x->op != Oextsw || x->cls != Kl)
 				continue;
+			/* the index is i, or i + kk: the address is i's pointer at a displacement of kk * c */
+			kk = 0;
+			a = 0;
+			c0 = 1;
+			qv = R;
+			pt = R;
+			mode2 = 0;
+			if (!req(x->arg[0], iv)) {
+				if (rtype(x->arg[0]) != RTmp || fn->tmp[x->arg[0].val].bid == -1u || !fn->tmp[x->arg[0].val].def)
+					continue;
+				if (!inloop(mark, stamp, fn->rpo[fn->tmp[x->arg[0].val].bid]))
+					continue;
+				a = fn->tmp[x->arg[0].val].def;
+				if (a->op == Oadd && a->cls == Kw && req(a->arg[0], iv) && ivconst(fn, a->arg[1], &kk)) {
+					if (c * kk != (int64_t)(int32_t)(c * kk))
+						continue;
+				} else {
+					/* the index is iv * c0 + q with q invariant: the base moves by c * q and the step is c * c0 * s */
+					if (!ivterm(fn, mark, stamp, a, iv, &c0, &qv, &pt))
+						continue;
+					if (c * c0 != (int64_t)(int32_t)(c * c0))
+						continue;
+					mode2 = 1;
+				}
+			}
 			/* the uses of the multiply */
 			t = &fn->tmp[m->to.val];
 			n = t->nuse;
 			if (n == 0 || n > IVMAX)
 				continue;
 			found = 1;
+			nin = 0;
+			nout = 0;
 			for (u=0; u<n; u++) {
 				use = &t->use[u];
-				if (use->type != UIns || !inloop(mark, stamp, fn->rpo[use->bid])) {
+				if (use->type != UIns) {
 					found = 0;
 					break;
 				}
@@ -450,12 +536,54 @@ strengthen(Fn *fn, Blk *h, Blk *P, Blk *L, uint *mark, uint stamp)
 					found = 0;
 					break;
 				}
-				adto[u] = ad->to;
-				adbase[u] = other;
+				ub = fn->rpo[use->bid];
+				if (!inloop(mark, stamp, ub)) {
+					/* a use after the loop gets its own copy of the chain in its block (the chain's operands dominate
+					   it: the header's phi and the loop's invariants), so the multiply can leave the loop */
+					if (mode2 && rtype(qv) == RTmp && fn->tmp[qv.val].bid != -1u && fn->rpo[fn->tmp[qv.val].bid] == ub) {
+						found = 0;
+						break;
+					}
+					oadd[nout] = ad;
+					oblk[nout] = ub;
+					nout++;
+					continue;
+				}
+				adto[nin] = ad->to;
+				adbase[nin] = other;
+				nin++;
 			}
+			if (found && nin == 0)
+				found = 0;
 			if (found) {
 				mto = m->to;
 				xto = x->to;
+				offk = c * kk;
+				atmp = a ? a->to : R;
+				/* each use after the loop: a copy of the chain (the multiply's defining instructions, in order) before it */
+				for (j2=0; j2<nout; j2++) {
+					nch = 0;
+					if (mode2 && !req(pt, R))
+						ch[nch++] = fn->tmp[pt.val].def;
+					if (a)
+						ch[nch++] = a;
+					ch[nch++] = x;
+					ch[nch++] = m;
+					ncl[j2] = nch;
+					for (k2=0; k2<nch; k2++) {
+						c2 = &cl[j2][k2];
+						*c2 = *ch[k2];
+						for (q2=0; q2<k2; q2++)
+							for (m2=0; m2<2; m2++)
+								if (req(c2->arg[m2], ch[q2]->to))
+									c2->arg[m2] = cto[q2];
+						c2->to = newtmp("ivsr", c2->cls, fn);
+						cto[k2] = c2->to;
+					}
+					for (m2=0; m2<2; m2++)
+						if (req(oadd[j2]->arg[m2], m->to))
+							oadd[j2]->arg[m2] = cto[nch-1];
+				}
 				break;
 			}
 		}
@@ -472,11 +600,22 @@ strengthen(Fn *fn, Blk *h, Blk *P, Blk *L, uint *mark, uint stamp)
 	/* one pointer per distinct base: the entry computes B + i0 * c, the latch adds c * s. With two or more bases a
 	   pointer per base costs more adds per iteration than the one index it replaces (saxpy, dot), so only one base
 	   is rewritten. */
-	for (u=1; u<n; u++)
+	for (u=1; u<nin; u++)
 		if (!req(adbase[u], adbase[0]))
 			return 0;
+	sc = c * c0;
+	if (mode2) {
+		t1 = newtmp("ivsr", Kl, fn);
+		appendins(P, (Ins){Oextsw, Kl, t1, {qv, R}});
+		t2 = newtmp("ivsr", Kl, fn);
+		appendins(P, (Ins){Omul, Kl, t2, {t1, getcon(c, fn)}});
+		tb = newtmp("ivsr", Kl, fn);
+		appendins(P, (Ins){Oadd, Kl, tb, {adbase[0], t2}});
+		for (u=0; u<nin; u++)
+			adbase[u] = tb;
+	}
 	ng = 0;
-	for (u=0; u<n; u++) {
+	for (u=0; u<nin; u++) {
 		for (g=0; g<ng; g++)
 			if (req(grpb[g], adbase[u]))
 				break;
@@ -486,7 +625,7 @@ strengthen(Fn *fn, Blk *h, Blk *P, Blk *L, uint *mark, uint stamp)
 		pv = newtmp("ivsr", Kl, fn);
 		grpv[ng] = pv;
 		if (isconst) {
-			v = i0 * c;
+			v = i0 * sc;
 			if (v == 0)
 				pinit = grpb[ng];
 			else {
@@ -496,16 +635,16 @@ strengthen(Fn *fn, Blk *h, Blk *P, Blk *L, uint *mark, uint stamp)
 		} else {
 			t1 = newtmp("ivsr", Kl, fn);
 			appendins(P, (Ins){Oextsw, Kl, t1, {init, R}});
-			if (c != 1) {
+			if (sc != 1) {
 				t2 = newtmp("ivsr", Kl, fn);
-				appendins(P, (Ins){Omul, Kl, t2, {t1, getcon(c, fn)}});
+				appendins(P, (Ins){Omul, Kl, t2, {t1, getcon(sc, fn)}});
 				t1 = t2;
 			}
 			pinit = newtmp("ivsr", Kl, fn);
 			appendins(P, (Ins){Oadd, Kl, pinit, {grpb[ng], t1}});
 		}
 		pnext = newtmp("ivsr", Kl, fn);
-		appendins(L, (Ins){Oadd, Kl, pnext, {pv, getcon(c * s, fn)}});
+		appendins(L, (Ins){Oadd, Kl, pnext, {pv, getcon(sc * s, fn)}});
 		np = vnew(1, sizeof np[0], PFn);
 		np->to = pv;
 		np->cls = Kl;
@@ -521,16 +660,44 @@ strengthen(Fn *fn, Blk *h, Blk *P, Blk *L, uint *mark, uint stamp)
 		ng++;
 	}
 	/* each add becomes its group's pointer; the multiply and the extension go when nothing reads them */
-	for (u=0; u<n; u++) {
+	filluse(fn);
+	for (u=0; u<nin; u++) {
 		for (g=0; g<ng; g++)
 			if (req(grpb[g], adbase[u]))
 				break;
-		renameuses(fn, adto[u], grpv[g]);
-		killdef(fn, adto[u]);
+		if (offk == 0) {
+			renameuses(fn, adto[u], grpv[g]);
+			killdef(fn, adto[u]);
+		} else {
+			/* the add of the displaced address: pointer + displacement (the load takes it in its addressing mode) */
+			Ins *ad2 = fn->tmp[adto[u].val].def;
+			ad2->op = Oadd;
+			ad2->cls = Kl;
+			ad2->arg[0] = grpv[g];
+			ad2->arg[1] = getcon(offk, fn);
+		}
 	}
-	killdef(fn, mto);
+	if (offk != 0 && rtype(atmp) == RTmp && !usedanywhere(fn, atmp))
+		killdef(fn, atmp);
+	if (!usedanywhere(fn, mto))
+		killdef(fn, mto);
 	if (!usedanywhere(fn, xto))
 		killdef(fn, xto);
+	if (mode2) {
+		if (!usedanywhere(fn, a->to))
+			killdef(fn, a->to);
+		if (rtype(pt) == RTmp && !usedanywhere(fn, pt))
+			killdef(fn, pt);
+	}
+	for (j2=0; j2<nout; j2++) {
+		Blk *cb = oblk[j2];
+		Ins *ni = vnew(cb->nins + ncl[j2], sizeof ni[0], PFn);
+		for (k2=0; k2<ncl[j2]; k2++)
+			ni[k2] = cl[j2][k2];
+		memcpy(ni + ncl[j2], cb->ins, cb->nins * sizeof ni[0]);
+		cb->ins = ni;
+		cb->nins += ncl[j2];
+	}
 	dropnops(fn);
 	filluse(fn);
 	return 1;
@@ -572,4 +739,229 @@ ivsr(Fn *fn)
 			;
 	}
 	free(mark);
+}
+
+/* loop rotation (nfcxx): the header's test runs again at the latch, so the back edge is the test's branch and no jump
+   goes back to the header. A block is in the region of the loop's body (inside: a loop block but not the header) or of
+   its exit (outside); a use in a phi counts in the block of its predecessor. */
+static int
+inreg(uint *mark, uint stamp, Blk *b, Blk *h, int inside)
+{
+	if (inside)
+		return b != h && inloop(mark, stamp, b);
+	return !inloop(mark, stamp, b);
+}
+
+static int
+usedregion(Fn *fn, Ref r, Blk *h, uint *mark, uint stamp, int inside)
+{
+	Blk *b;
+	Phi *p;
+	Ins *i;
+	uint a, m;
+
+	for (b=fn->start; b; b=b->link) {
+		for (p=b->phi; p; p=p->link)
+			for (a=0; a<p->narg; a++)
+				if (req(p->arg[a], r) && inreg(mark, stamp, p->blk[a], h, inside))
+					return 1;
+		if (!inreg(mark, stamp, b, h, inside))
+			continue;
+		for (i=b->ins; i<&b->ins[b->nins]; i++)
+			if (i->op != Onop)
+				for (m=0; m<2; m++)
+					if (req(i->arg[m], r))
+						return 1;
+		if (req(b->jmp.arg, r))
+			return 1;
+	}
+	return 0;
+}
+
+static void
+renameregion(Fn *fn, Ref from, Ref to, Blk *h, uint *mark, uint stamp, int inside)
+{
+	Blk *b;
+	Phi *p;
+	Ins *i;
+	uint a, m;
+
+	for (b=fn->start; b; b=b->link) {
+		for (p=b->phi; p; p=p->link)
+			for (a=0; a<p->narg; a++)
+				if (req(p->arg[a], from) && inreg(mark, stamp, p->blk[a], h, inside))
+					p->arg[a] = to;
+		if (!inreg(mark, stamp, b, h, inside))
+			continue;
+		for (i=b->ins; i<&b->ins[b->nins]; i++)
+			if (i->op != Onop)
+				for (m=0; m<2; m++)
+					if (req(i->arg[m], from))
+						i->arg[m] = to;
+		if (req(b->jmp.arg, from))
+			b->jmp.arg = to;
+	}
+}
+
+static Phi *
+newphi2(Fn *fn, Ref to, int cls, Blk *b0, Ref a0, Blk *b1, Ref a1)
+{
+	Phi *np;
+
+	(void)fn;
+	np = vnew(1, sizeof np[0], PFn);
+	np->to = to;
+	np->cls = cls;
+	np->narg = 2;
+	np->arg = vnew(2, sizeof np->arg[0], PFn);
+	np->blk = vnew(2, sizeof np->blk[0], PFn);
+	np->arg[0] = a0;
+	np->blk[0] = b0;
+	np->arg[1] = a1;
+	np->blk[1] = b1;
+	return np;
+}
+
+/* the loop with header h (entry P, latch L) is rotated if it has the shape: h jumps by a jnz on a comparison that is
+   its only instruction, the body is entered only from h, the exit is entered only from h, and L jumps to h */
+static int
+rotate1(Fn *fn, Blk *h, Blk *L, uint *mark, uint stamp)
+{
+	Blk *body, *ex;
+	Phi *p, *np;
+	Ins *i, *cmp;
+	Ref al, r, nt;
+	int kk, cc, ncmp;
+	uint a, n;
+
+	body = h->s1;
+	ex = h->s2;
+	if (h->jmp.type != Jjnz || L == h || L->jmp.type != Jjmp || L->s1 != h || L->s2)
+		return 0;
+	if (!inloop(mark, stamp, body) || inloop(mark, stamp, ex) || body->npred != 1 || body->phi)
+		return 0;
+	if (ex->npred != 1 || ex->phi)
+		return 0;
+	/* the header is the loop's only exit: no other block leaves the loop (a break) or returns from it */
+	{
+		Blk *q;
+
+		for (q=fn->start; q; q=q->link) {
+			if (q == h || !inloop(mark, stamp, q))
+				continue;
+			if (isret(q->jmp.type) || (q->s1 && !inloop(mark, stamp, q->s1)) || (q->s2 && !inloop(mark, stamp, q->s2)))
+				return 0;
+		}
+	}
+	ncmp = 0;
+	cmp = 0;
+	for (i=h->ins; i<&h->ins[h->nins]; i++) {
+		if (i->op == Onop || i->op == Odbgloc)
+			continue;
+		if (!iscmp(i->op, &kk, &cc) || !req(i->to, h->jmp.arg) || fn->tmp[i->to.val].nuse != 1)
+			return 0;
+		cmp = i;
+		ncmp++;
+	}
+	if (ncmp != 1)
+		return 0;
+	for (p=h->phi; p; p=p->link) {
+		n = p->narg;
+		for (a=0; a<n; a++)
+			if (p->blk[a] == L)
+				break;
+		if (a == n)
+			return 0;
+	}
+
+	/* the header's phis: a phi used in the body or in the loop gets a phi at the body; one used after the loop gets
+	   a phi at the exit; both take the header's value on entry and the latch's value on the back edge */
+	for (p=h->phi; p; p=p->link) {
+		for (a=0; a<p->narg; a++)
+			if (p->blk[a] == L)
+				break;
+		al = p->arg[a];
+		if (usedregion(fn, p->to, h, mark, stamp, 1)) {
+			nt = newtmp("rot", p->cls, fn);
+			renameregion(fn, p->to, nt, h, mark, stamp, 1);
+			np = newphi2(fn, nt, p->cls, h, p->to, L, al);
+			np->link = body->phi;
+			body->phi = np;
+		}
+		if (usedregion(fn, p->to, h, mark, stamp, 0)) {
+			nt = newtmp("rot", p->cls, fn);
+			renameregion(fn, p->to, nt, h, mark, stamp, 0);
+			np = newphi2(fn, nt, p->cls, h, p->to, L, al);
+			np->link = ex->phi;
+			ex->phi = np;
+		}
+	}
+
+	/* the latch runs the test for the next iteration: the header's phis become their latch values */
+	{
+		Ins c = *cmp;
+		for (a=0; a<2; a++) {
+			r = c.arg[a];
+			for (p=h->phi; p; p=p->link)
+				if (req(r, p->to)) {
+					uint q;
+					for (q=0; q<p->narg; q++)
+						if (p->blk[q] == L)
+							break;
+					c.arg[a] = p->arg[q];
+					break;
+				}
+		}
+		c.to = newtmp("rot", c.cls, fn);
+		appendins(L, c);
+		L->jmp.type = Jjnz;
+		L->jmp.arg = c.to;
+		L->s1 = body;
+		L->s2 = ex;
+	}
+	fillcfg(fn);
+	filluse(fn);
+	return 1;
+}
+
+void
+rotate(Fn *fn)
+{
+	Blk *h, *P, *L, *b, **stack;
+	uint *mark, stamp, n, p, nlatch, nentry;
+	int changed;
+
+	fillcfg(fn);
+	filldom(fn);
+	filluse(fn);
+	for (n=0; n<fn->nblk; n++) {
+		h = fn->rpo[n];
+		if (h->npred != 2)
+			continue;
+		P = L = 0;
+		nlatch = nentry = 0;
+		for (p=0; p<h->npred; p++) {
+			b = h->pred[p];
+			if (dom(h, b)) {
+				L = b;
+				nlatch++;
+			} else {
+				P = b;
+				nentry++;
+			}
+		}
+		if (nlatch != 1 || nentry != 1 || P->jmp.type != Jjmp || P->s1 != h || P->s2)
+			continue;
+		mark = emalloc(fn->nblk * sizeof mark[0]);
+		for (p=0; p<fn->nblk; p++)
+			mark[p] = 0;
+		stamp = 1;
+		loopbody(h, mark, stamp, &stack);
+		changed = rotate1(fn, h, L, mark, stamp);
+		free(mark);
+		if (changed) {
+			filldom(fn);
+			filluse(fn);
+		}
+	}
 }

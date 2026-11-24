@@ -631,6 +631,7 @@ int reaches(Fn *, Blk *, Blk *);
 int reachesnotvia(Fn *, Blk *, Blk *, Blk *);
 int ifgraph(Blk *, Blk **, Blk **, Blk **);
 void simplcfg(Fn *);
+void jthread(Fn *);   /* jump threading of constant phi arguments (cfg.c, nfcxx) */
 
 /* mem.c */
 void promote(Fn *);
@@ -675,6 +676,7 @@ int pinned(Ins *);
 void gcm(Fn *);
 void licm(Fn *);
 void ivsr(Fn *);   /* loop strength reduction of addresses (licm.c, nfcxx) */
+void rotate(Fn *);   /* loop rotation (licm.c, nfcxx) */
 
 /* ifopt.c */
 void ifconvert(Fn *fn);

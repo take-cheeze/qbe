@@ -1,0 +1,32 @@
+# a && b as a join: the block that tests the phi of the two conditions holds only the phi and the jnz. The
+# predecessor that knows the first condition is false passes a constant 0 (the edge goes straight to the else
+# target); the other passes its own comparison, and it branches on it directly. The result is 1 when a == 1 and
+# b == 2, else 0.
+export function w $and2(w %a, w %b) {
+@start
+	%c1 =w ceqw %a, 1
+	jnz %c1, @second, @none
+@second
+	%c2 =w ceqw %b, 2
+	jmp @join
+@none
+	jmp @join
+@join
+	%t =w phi @second %c2, @none 0
+	jnz %t, @yes, @no
+@yes
+	ret 1
+@no
+	ret 0
+}
+
+# >>> driver
+# extern int and2(int, int);
+# int main() {
+#     if (and2(1, 2) != 1) return 1;
+#     if (and2(1, 3) != 0) return 2;
+#     if (and2(0, 2) != 0) return 3;
+#     if (and2(2, 2) != 0) return 4;
+#     return 0;
+# }
+# <<<

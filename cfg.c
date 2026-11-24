@@ -652,3 +652,52 @@ simplcfg(Fn *fn)
 		printfn(fn, stderr);
 	}
 }
+
+/* jump threading: a block that is only a phi and the jnz on it (its test is used nowhere else) is bypassed by each
+   predecessor p that jumps to it. p's own value is the test there: a constant selects the target directly, any other
+   value makes p's jump a jnz on that value with the block's two targets. The targets must have no phis. The block keeps
+   no predecessor and fillcfg prunes it. */
+void
+jthread(Fn *fn)
+{
+	Blk *j, *p, *t1, *t2, *t;
+	Phi *ph;
+	uint a, k, changed;
+	int64_t v;
+	int isc;
+
+	filluse(fn);
+	changed = 0;
+	for (j=fn->start; j; j=j->link) {
+		if (j->jmp.type != Jjnz || !j->phi || j->phi->link || !req(j->phi->to, j->jmp.arg))
+			continue;
+		if (!onlydbg(j) || fn->tmp[j->jmp.arg.val].nuse != 1)
+			continue;
+		t1 = j->s1;
+		t2 = j->s2;
+		if (t1 == j || t2 == j || t1->phi || t2->phi)
+			continue;
+		ph = j->phi;
+		/* the constants first (they need no test); a block left with no predecessor is pruned by fillcfg */
+		for (k=0; k<2; k++)
+		for (a=0; a<ph->narg; a++) {
+			p = ph->blk[a];
+			if (p->jmp.type != Jjmp || p->s1 != j || p->s2)
+				continue;
+			isc = rtype(ph->arg[a]) == RCon && fn->con[ph->arg[a].val].type == CBits;
+			if (k == 0 && isc) {
+				v = fn->con[ph->arg[a].val].bits.i;
+				p->s1 = v ? t1 : t2;
+			} else if (k == 1 && rtype(ph->arg[a]) == RTmp) {
+				p->jmp.type = Jjnz;
+				p->jmp.arg = ph->arg[a];
+				p->s1 = t1;
+				p->s2 = t2;
+			} else
+				continue;
+			changed = 1;
+		}
+	}
+	if (changed)
+		fillcfg(fn);
+}

@@ -94,9 +94,14 @@ func(Fn *fn)
 	gvn(fn);
 	fillcfg(fn);
 	simplcfg(fn);
+	jthread(fn);
 	filluse(fn);
 	filldom(fn);
 	gcm(fn);
+	filluse(fn);
+	filldom(fn);
+	fillalias(fn);
+	loadopt(fn);
 	filluse(fn);
 	licm(fn);
 	filluse(fn);
@@ -118,6 +123,7 @@ func(Fn *fn)
 	filluse(fn);
 	filldom(fn);
 	ivsr(fn);
+	rotate(fn);
 	T.isel(fn);
 	fillcfg(fn);
 	filllive(fn);
