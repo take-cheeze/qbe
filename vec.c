@@ -2146,6 +2146,38 @@ slpsplit(Fn *fn, Slp *s, Blk *b, Ref *vals, int n, int kind, int size, Ref base0
 }
 
 /* a block: SLP its one group of VF stores, if there is one */
+/* Shared scratch of slpblock: slpdef[t] is the definition of temporary t in the block being scanned. The entries a block sets
+   (slpset) are cleared when it is done, so a block costs its own size, not fn->ntmp. vecmut counts the blocks that were
+   rewritten: the use counts are stale after one, and only then are they recomputed. */
+static Ins **slpdef;
+static uint slpdefn;
+static uint *slpset;
+static uint nslpset, capslpset;
+static uint vecmut;
+
+static void
+vgrowu(uint **a, uint *cap, uint n)
+{
+	if (n > *cap) {
+		*cap = *cap ? 2 * *cap : 64;
+		if (*cap < n)
+			*cap = n;
+		*a = realloc(*a, *cap * sizeof *a[0]);
+		if (!*a)
+			die("vgrowu, out of memory");
+	}
+}
+
+static void
+slpdone(Slp *s)
+{
+	uint i;
+
+	for (i=0; i<nslpset; i++)
+		s->def[slpset[i]] = 0;
+	nslpset = 0;
+}
+
 static int
 slpblock(Fn *fn, Blk *b)
 {
@@ -2157,10 +2189,21 @@ slpblock(Fn *fn, Blk *b)
 
 	memset(&s, 0, sizeof s);
 	s.b = b;
-	s.def = emalloc(fn->ntmp * sizeof s.def[0]);
+	if (slpdefn < fn->ntmp) {
+		slpdef = realloc(slpdef, fn->ntmp * sizeof slpdef[0]);
+		if (!slpdef)
+			die("slpblock, out of memory");
+		memset(slpdef + slpdefn, 0, (fn->ntmp - slpdefn) * sizeof slpdef[0]);
+		slpdefn = fn->ntmp;
+	}
+	s.def = slpdef;
+	nslpset = 0;
 	for (ins=b->ins; ins<&b->ins[b->nins]; ins++)
-		if (rtype(ins->to) == RTmp)
+		if (rtype(ins->to) == RTmp) {
 			s.def[ins->to.val] = ins;
+			vgrowu(&slpset, &capslpset, nslpset + 1);
+			slpset[nslpset++] = ins->to.val;
+		}
 	if (!slpsimple(fn, b))
 		goto no;
 	nst = 0;
@@ -2243,7 +2286,8 @@ slpblock(Fn *fn, Blk *b)
 				if (vecremarks)
 					fprintf(stderr, "vec: %s: block @%s: SLP with a run-time overlap test, %d stores\n",
 						fn->name, b->name, n);
-				free(s.def);
+				slpdone(&s);
+				vecmut++;
 				return 1;
 			}
 			/* the block becomes the tree: its values' addresses are rebuilt, its instructions replaced */
@@ -2272,12 +2316,13 @@ slpblock(Fn *fn, Blk *b)
 			if (vecremarks)
 				fprintf(stderr, "vec: %s: block @%s: SLP, %d stores of %d lanes vectorized\n",
 					fn->name, b->name, n, kind == LD ? 2 : 4);
-			free(s.def);
+			slpdone(&s);
+			vecmut++;
 			return 1;
 		}
 	}
 no:
-	free(s.def);
+	slpdone(&s);
 	return 0;
 }
 
@@ -2306,8 +2351,8 @@ vec(Fn *fn)
 			cand[nc++] = b;
 		}
 	}
+	filluse(fn);
 	for (k=0; k<nc; k++) {
-		filluse(fn);
 		memset(&lp, 0, sizeof lp);
 		if (debug['W'])
 			printfn(fn, stderr);	/* -d W: the IR the pass sees */
@@ -2340,12 +2385,25 @@ vec(Fn *fn)
 		free(lp.redof);
 	}
 	/* straight-line code, block by block (SLP; not on rv64 yet) */
-	for (n=0; n<fn->nblk && !rvv; n++) {
+	if (!rvv) {
+		uint seen = vecmut;
 		filluse(fn);
-		slpblock(fn, fn->rpo[n]);
-		if (debug['W'])
-			printfn(fn, stderr);	/* -d W: the IR after the SLP rewrite */
+		for (n=0; n<fn->nblk; n++) {
+			if (vecmut != seen) {
+				filluse(fn);
+				seen = vecmut;
+			}
+			slpblock(fn, fn->rpo[n]);
+			if (debug['W'])
+				printfn(fn, stderr);	/* -d W: the IR after the SLP rewrite */
+		}
 	}
+	free(slpdef);
+	slpdef = 0;
+	slpdefn = 0;
+	free(slpset);
+	slpset = 0;
+	nslpset = capslpset = 0;
 	vfree(ib);
 	ib = 0;
 	vfree(pib);
