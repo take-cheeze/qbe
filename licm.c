@@ -431,7 +431,7 @@ strengthen(Fn *fn, Blk *h, Blk *P, Blk *L, uint *mark, uint stamp)
 	Ref qv, pt, tb;
 	int mode2;
 	Ins *a;
-	uint bi, j, u, n, ng, g;
+	uint bi, j, u, n, nin, ng, g;
 	int found, isconst;
 
 	filluse(fn);
@@ -509,12 +509,15 @@ strengthen(Fn *fn, Blk *h, Blk *P, Blk *L, uint *mark, uint stamp)
 			if (n == 0 || n > IVMAX)
 				continue;
 			found = 1;
+			nin = 0;
 			for (u=0; u<n; u++) {
 				use = &t->use[u];
-				if (use->type != UIns || !inloop(mark, stamp, fn->rpo[use->bid])) {
+				if (use->type != UIns) {
 					found = 0;
 					break;
 				}
+				if (!inloop(mark, stamp, fn->rpo[use->bid]))
+					continue;   /* a use after the loop keeps the multiply and its address add */
 				ad = use->u.ins;
 				if (ad->op != Oadd || ad->cls != Kl || req(ad->arg[0], ad->arg[1]))
 					found = 0;
@@ -530,9 +533,12 @@ strengthen(Fn *fn, Blk *h, Blk *P, Blk *L, uint *mark, uint stamp)
 					found = 0;
 					break;
 				}
-				adto[u] = ad->to;
-				adbase[u] = other;
+				adto[nin] = ad->to;
+				adbase[nin] = other;
+				nin++;
 			}
+			if (found && nin == 0)
+				found = 0;
 			if (found) {
 				mto = m->to;
 				xto = x->to;
@@ -554,7 +560,7 @@ strengthen(Fn *fn, Blk *h, Blk *P, Blk *L, uint *mark, uint stamp)
 	/* one pointer per distinct base: the entry computes B + i0 * c, the latch adds c * s. With two or more bases a
 	   pointer per base costs more adds per iteration than the one index it replaces (saxpy, dot), so only one base
 	   is rewritten. */
-	for (u=1; u<n; u++)
+	for (u=1; u<nin; u++)
 		if (!req(adbase[u], adbase[0]))
 			return 0;
 	sc = c * c0;
@@ -565,11 +571,11 @@ strengthen(Fn *fn, Blk *h, Blk *P, Blk *L, uint *mark, uint stamp)
 		appendins(P, (Ins){Omul, Kl, t2, {t1, getcon(c, fn)}});
 		tb = newtmp("ivsr", Kl, fn);
 		appendins(P, (Ins){Oadd, Kl, tb, {adbase[0], t2}});
-		for (u=0; u<n; u++)
+		for (u=0; u<nin; u++)
 			adbase[u] = tb;
 	}
 	ng = 0;
-	for (u=0; u<n; u++) {
+	for (u=0; u<nin; u++) {
 		for (g=0; g<ng; g++)
 			if (req(grpb[g], adbase[u]))
 				break;
@@ -615,7 +621,7 @@ strengthen(Fn *fn, Blk *h, Blk *P, Blk *L, uint *mark, uint stamp)
 	}
 	/* each add becomes its group's pointer; the multiply and the extension go when nothing reads them */
 	filluse(fn);
-	for (u=0; u<n; u++) {
+	for (u=0; u<nin; u++) {
 		for (g=0; g<ng; g++)
 			if (req(grpb[g], adbase[u]))
 				break;
@@ -633,7 +639,8 @@ strengthen(Fn *fn, Blk *h, Blk *P, Blk *L, uint *mark, uint stamp)
 	}
 	if (offk != 0 && rtype(atmp) == RTmp && !usedanywhere(fn, atmp))
 		killdef(fn, atmp);
-	killdef(fn, mto);
+	if (!usedanywhere(fn, mto))
+		killdef(fn, mto);
 	if (!usedanywhere(fn, xto))
 		killdef(fn, xto);
 	if (mode2) {
