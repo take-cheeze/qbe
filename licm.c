@@ -415,6 +415,77 @@ ivterm(Fn *fn, uint *mark, uint stamp, Ins *a, Ref iv, int64_t *c0, Ref *q, Ref 
 	return 0;
 }
 
+/* the number of reads of r: phi args, instruction args and the jump argument */
+static uint
+usecount(Fn *fn, Ref r)
+{
+	Blk *b;
+	Phi *p;
+	Ins *i;
+	uint a, m, n;
+
+	n = 0;
+	for (b=fn->start; b; b=b->link) {
+		for (p=b->phi; p; p=p->link)
+			for (a=0; a<p->narg; a++)
+				if (req(p->arg[a], r))
+					n++;
+		for (i=b->ins; i<&b->ins[b->nins]; i++)
+			if (i->op != Onop)
+				for (m=0; m<2; m++)
+					if (req(i->arg[m], r))
+						n++;
+		if (req(b->jmp.arg, r))
+			n++;
+	}
+	return n;
+}
+
+/* end compare (after the pointer rewrite): the header's test i < N, with i the counter whose only other read is
+   its own increment, becomes pv < base + N * sc, where pv = base + i * sc is the group's pointer and base is the
+   group's value at i = 0. Then the counter and its increment are dead and go.
+   The unsigned pointer compare matches the counter's order only while base + i * sc does not wrap the 64-bit
+   range, which holds for the addresses ivsr rewrites. sc > 0 and s > 0 are needed so the
+   pointer compare is the same order as the counter's; the counter must start at a constant i0 in [0, N]. */
+static void
+endcompare(Fn *fn, Blk *h, Blk *P, Phi *ivp, Ref iv, Ref lv, Ref pv, Ref base, int64_t sc, int64_t i0, int64_t s)
+{
+	Phi *q, *prev;
+	Ins *x;
+	Ref end;
+	int64_t N;
+	uint j;
+
+	for (j=0; j<h->nins; j++) {
+		x = &h->ins[j];
+		if (x->op != Ocsltw || !req(x->arg[0], iv) || !ivconst(fn, x->arg[1], &N))
+			continue;
+		if (s <= 0 || sc <= 0 || i0 < 0 || N < i0 || N > INT32_MAX)
+			break;
+		if (usecount(fn, x->to) != 1 || !req(h->jmp.arg, x->to))
+			continue;
+		end = newtmp("ivsr", Kl, fn);
+		appendins(P, (Ins){Oadd, Kl, end, {base, getcon(N * sc, fn)}});
+		x->op = Ocultl;
+		x->arg[0] = pv;
+		x->arg[1] = end;
+		break;
+	}
+	if (usecount(fn, iv) != 1 || usecount(fn, lv) != 1)
+		return;
+	/* the counter's only other read is its increment: both go */
+	prev = 0;
+	for (q=h->phi; q; prev=q, q=q->link)
+		if (q == ivp) {
+			if (prev)
+				prev->link = q->link;
+			else
+				h->phi = q->link;
+			break;
+		}
+	killdef(fn, lv);
+}
+
 /* one chain of the loop with header h (entry P, latch L): 1 if it was rewritten, 0 if none qualifies */
 static int
 strengthen(Fn *fn, Blk *h, Blk *P, Blk *L, uint *mark, uint stamp)
@@ -697,6 +768,12 @@ strengthen(Fn *fn, Blk *h, Blk *P, Blk *L, uint *mark, uint stamp)
 		memcpy(ni + ncl[j2], cb->ins, cb->nins * sizeof ni[0]);
 		cb->ins = ni;
 		cb->nins += ncl[j2];
+	}
+	filluse(fn);
+	if (isconst && ng > 0) {
+		Ref lvp;
+		if (ivphiarg(ivp, L, &lvp))
+			endcompare(fn, h, P, ivp, iv, lvp, grpv[0], grpb[0], sc, i0, s);
 	}
 	dropnops(fn);
 	filluse(fn);
