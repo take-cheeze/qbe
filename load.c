@@ -118,7 +118,7 @@ load(Slice sl, bits msk, Loc *l)
 {
 	Alias *a;
 	Ref r, r1;
-	int ld, cls, all;
+	int ld, cls, all, off;
 	Con c;
 
 	ld = (int[]){
@@ -135,7 +135,13 @@ load(Slice sl, bits msk, Loc *l)
 	r = sl.ref;
 	/* sl.ref might not be live here,
 	 * but its alias base ref will be
-	 * (see killsl() below) */
+	 * (see killsl() below). sl.off is
+	 * the offset of the slice from sl.ref
+	 * (rebase() moves the offset of a
+	 * tmp's alias into it), so the address
+	 * is sl.ref plus that offset plus the
+	 * alias offset of sl.ref, if any */
+	off = sl.off;
 	if (rtype(r) == RTmp) {
 		a = &curf->tmp[r.val].alias;
 		switch (a->type) {
@@ -145,9 +151,10 @@ load(Slice sl, bits msk, Loc *l)
 		case AEsc:
 		case AUnk:
 			r = TMP(a->base);
-			if (!a->offset)
+			off += a->offset;
+			if (!off)
 				break;
-			r1 = getcon(a->offset, curf);
+			r1 = getcon(off, curf);
 			r = iins(Kptr, Oadd, r, r1, l);
 			break;
 		case ACon:
@@ -155,10 +162,16 @@ load(Slice sl, bits msk, Loc *l)
 			memset(&c, 0, sizeof c);
 			c.type = CAddr;
 			c.sym = a->u.sym;
-			c.bits.i = a->offset;
+			c.bits.i = a->offset + off;
 			r = newcon(&c, curf);
 			break;
 		}
+	} else if (off) {
+		if (rtype(r) != RCon)
+			die("unreachable");
+		c = curf->con[r.val];
+		c.bits.i += off;
+		r = newcon(&c, curf);
 	}
 	r = iins(cls, ld, r, R, l);
 	if (!all)
