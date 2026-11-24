@@ -1,0 +1,28 @@
+# A counting loop whose test is the only instruction of its header and whose counter and sum are used after the loop:
+# loop rotation runs the test at the latch, so the body and the exit take phis of the counter and the sum. For n = 5
+# the sum is 0 + 1 + 2 + 3 + 4 = 10 and the counter is 5 at the exit: 10 * 10 + 5 = 105; for n = 0 the result is 0.
+export function w $test(w %n) {
+@start
+	jmp @head
+@head
+	%k =w phi @start 0, @latch %k2
+	%s =w phi @start 0, @latch %s2
+	%c =w csltw %k, %n
+	jnz %c, @body, @done
+@body
+	%s1 =w add %s, %k
+	jmp @latch
+@latch
+	%s2 =w copy %s1
+	%k2 =w add %k, 1
+	jmp @head
+@done
+	%r1 =w mul %s, 10
+	%r =w add %r1, %k
+	ret %r
+}
+
+# >>> driver
+# extern int test(int);
+# int main() { return test(5) != 105 || test(0) != 0; }
+# <<<

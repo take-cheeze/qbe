@@ -691,3 +691,228 @@ ivsr(Fn *fn)
 	}
 	free(mark);
 }
+
+/* loop rotation (nfcxx): the header's test runs again at the latch, so the back edge is the test's branch and no jump
+   goes back to the header. A block is in the region of the loop's body (inside: a loop block but not the header) or of
+   its exit (outside); a use in a phi counts in the block of its predecessor. */
+static int
+inreg(uint *mark, uint stamp, Blk *b, Blk *h, int inside)
+{
+	if (inside)
+		return b != h && inloop(mark, stamp, b);
+	return !inloop(mark, stamp, b);
+}
+
+static int
+usedregion(Fn *fn, Ref r, Blk *h, uint *mark, uint stamp, int inside)
+{
+	Blk *b;
+	Phi *p;
+	Ins *i;
+	uint a, m;
+
+	for (b=fn->start; b; b=b->link) {
+		for (p=b->phi; p; p=p->link)
+			for (a=0; a<p->narg; a++)
+				if (req(p->arg[a], r) && inreg(mark, stamp, p->blk[a], h, inside))
+					return 1;
+		if (!inreg(mark, stamp, b, h, inside))
+			continue;
+		for (i=b->ins; i<&b->ins[b->nins]; i++)
+			if (i->op != Onop)
+				for (m=0; m<2; m++)
+					if (req(i->arg[m], r))
+						return 1;
+		if (req(b->jmp.arg, r))
+			return 1;
+	}
+	return 0;
+}
+
+static void
+renameregion(Fn *fn, Ref from, Ref to, Blk *h, uint *mark, uint stamp, int inside)
+{
+	Blk *b;
+	Phi *p;
+	Ins *i;
+	uint a, m;
+
+	for (b=fn->start; b; b=b->link) {
+		for (p=b->phi; p; p=p->link)
+			for (a=0; a<p->narg; a++)
+				if (req(p->arg[a], from) && inreg(mark, stamp, p->blk[a], h, inside))
+					p->arg[a] = to;
+		if (!inreg(mark, stamp, b, h, inside))
+			continue;
+		for (i=b->ins; i<&b->ins[b->nins]; i++)
+			if (i->op != Onop)
+				for (m=0; m<2; m++)
+					if (req(i->arg[m], from))
+						i->arg[m] = to;
+		if (req(b->jmp.arg, from))
+			b->jmp.arg = to;
+	}
+}
+
+static Phi *
+newphi2(Fn *fn, Ref to, int cls, Blk *b0, Ref a0, Blk *b1, Ref a1)
+{
+	Phi *np;
+
+	(void)fn;
+	np = vnew(1, sizeof np[0], PFn);
+	np->to = to;
+	np->cls = cls;
+	np->narg = 2;
+	np->arg = vnew(2, sizeof np->arg[0], PFn);
+	np->blk = vnew(2, sizeof np->blk[0], PFn);
+	np->arg[0] = a0;
+	np->blk[0] = b0;
+	np->arg[1] = a1;
+	np->blk[1] = b1;
+	return np;
+}
+
+/* the loop with header h (entry P, latch L) is rotated if it has the shape: h jumps by a jnz on a comparison that is
+   its only instruction, the body is entered only from h, the exit is entered only from h, and L jumps to h */
+static int
+rotate1(Fn *fn, Blk *h, Blk *L, uint *mark, uint stamp)
+{
+	Blk *body, *ex;
+	Phi *p, *np;
+	Ins *i, *cmp;
+	Ref al, r, nt;
+	int kk, cc, ncmp;
+	uint a, n;
+
+	body = h->s1;
+	ex = h->s2;
+	if (h->jmp.type != Jjnz || L == h || L->jmp.type != Jjmp || L->s1 != h || L->s2)
+		return 0;
+	if (!inloop(mark, stamp, body) || inloop(mark, stamp, ex) || body->npred != 1 || body->phi)
+		return 0;
+	if (ex->npred != 1 || ex->phi)
+		return 0;
+	/* the header is the loop's only exit: no other block leaves the loop (a break) or returns from it */
+	{
+		Blk *q;
+
+		for (q=fn->start; q; q=q->link) {
+			if (q == h || !inloop(mark, stamp, q))
+				continue;
+			if (isret(q->jmp.type) || (q->s1 && !inloop(mark, stamp, q->s1)) || (q->s2 && !inloop(mark, stamp, q->s2)))
+				return 0;
+		}
+	}
+	ncmp = 0;
+	cmp = 0;
+	for (i=h->ins; i<&h->ins[h->nins]; i++) {
+		if (i->op == Onop || i->op == Odbgloc)
+			continue;
+		if (!iscmp(i->op, &kk, &cc) || !req(i->to, h->jmp.arg) || fn->tmp[i->to.val].nuse != 1)
+			return 0;
+		cmp = i;
+		ncmp++;
+	}
+	if (ncmp != 1)
+		return 0;
+	for (p=h->phi; p; p=p->link) {
+		n = p->narg;
+		for (a=0; a<n; a++)
+			if (p->blk[a] == L)
+				break;
+		if (a == n)
+			return 0;
+	}
+
+	/* the header's phis: a phi used in the body or in the loop gets a phi at the body; one used after the loop gets
+	   a phi at the exit; both take the header's value on entry and the latch's value on the back edge */
+	for (p=h->phi; p; p=p->link) {
+		for (a=0; a<p->narg; a++)
+			if (p->blk[a] == L)
+				break;
+		al = p->arg[a];
+		if (usedregion(fn, p->to, h, mark, stamp, 1)) {
+			nt = newtmp("rot", p->cls, fn);
+			renameregion(fn, p->to, nt, h, mark, stamp, 1);
+			np = newphi2(fn, nt, p->cls, h, p->to, L, al);
+			np->link = body->phi;
+			body->phi = np;
+		}
+		if (usedregion(fn, p->to, h, mark, stamp, 0)) {
+			nt = newtmp("rot", p->cls, fn);
+			renameregion(fn, p->to, nt, h, mark, stamp, 0);
+			np = newphi2(fn, nt, p->cls, h, p->to, L, al);
+			np->link = ex->phi;
+			ex->phi = np;
+		}
+	}
+
+	/* the latch runs the test for the next iteration: the header's phis become their latch values */
+	{
+		Ins c = *cmp;
+		for (a=0; a<2; a++) {
+			r = c.arg[a];
+			for (p=h->phi; p; p=p->link)
+				if (req(r, p->to)) {
+					uint q;
+					for (q=0; q<p->narg; q++)
+						if (p->blk[q] == L)
+							break;
+					c.arg[a] = p->arg[q];
+					break;
+				}
+		}
+		c.to = newtmp("rot", c.cls, fn);
+		appendins(L, c);
+		L->jmp.type = Jjnz;
+		L->jmp.arg = c.to;
+		L->s1 = body;
+		L->s2 = ex;
+	}
+	fillcfg(fn);
+	filluse(fn);
+	return 1;
+}
+
+void
+rotate(Fn *fn)
+{
+	Blk *h, *P, *L, *b, **stack;
+	uint *mark, stamp, n, p, nlatch, nentry;
+	int changed;
+
+	fillcfg(fn);
+	filldom(fn);
+	filluse(fn);
+	for (n=0; n<fn->nblk; n++) {
+		h = fn->rpo[n];
+		if (h->npred != 2)
+			continue;
+		P = L = 0;
+		nlatch = nentry = 0;
+		for (p=0; p<h->npred; p++) {
+			b = h->pred[p];
+			if (dom(h, b)) {
+				L = b;
+				nlatch++;
+			} else {
+				P = b;
+				nentry++;
+			}
+		}
+		if (nlatch != 1 || nentry != 1 || P->jmp.type != Jjmp || P->s1 != h || P->s2)
+			continue;
+		mark = emalloc(fn->nblk * sizeof mark[0]);
+		for (p=0; p<fn->nblk; p++)
+			mark[p] = 0;
+		stamp = 1;
+		loopbody(h, mark, stamp, &stack);
+		changed = rotate1(fn, h, L, mark, stamp);
+		free(mark);
+		if (changed) {
+			filldom(fn);
+			filluse(fn);
+		}
+	}
+}

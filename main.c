@@ -119,6 +119,7 @@ func(Fn *fn)
 	filluse(fn);
 	filldom(fn);
 	ivsr(fn);
+	rotate(fn);
 	T.isel(fn);
 	fillcfg(fn);
 	filllive(fn);
