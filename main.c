@@ -94,6 +94,7 @@ func(Fn *fn)
 	gvn(fn);
 	fillcfg(fn);
 	simplcfg(fn);
+	jthread(fn);
 	filluse(fn);
 	filldom(fn);
 	gcm(fn);
