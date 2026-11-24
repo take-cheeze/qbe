@@ -430,6 +430,10 @@ strengthen(Fn *fn, Blk *h, Blk *P, Blk *L, uint *mark, uint stamp)
 	int64_t c0, sc;
 	Ref qv, pt, tb;
 	int mode2;
+	Ins *oadd[IVMAX], *ch[4], cl[IVMAX][4], *c2;
+	Blk *oblk[IVMAX], *ub;
+	Ref cto[4];
+	uint nout, ncl[IVMAX], nch, j2, k2, q2, m2;
 	Ins *a;
 	uint bi, j, u, n, nin, ng, g;
 	int found, isconst;
@@ -510,14 +514,13 @@ strengthen(Fn *fn, Blk *h, Blk *P, Blk *L, uint *mark, uint stamp)
 				continue;
 			found = 1;
 			nin = 0;
+			nout = 0;
 			for (u=0; u<n; u++) {
 				use = &t->use[u];
 				if (use->type != UIns) {
 					found = 0;
 					break;
 				}
-				if (!inloop(mark, stamp, fn->rpo[use->bid]))
-					continue;   /* a use after the loop keeps the multiply and its address add */
 				ad = use->u.ins;
 				if (ad->op != Oadd || ad->cls != Kl || req(ad->arg[0], ad->arg[1]))
 					found = 0;
@@ -533,6 +536,19 @@ strengthen(Fn *fn, Blk *h, Blk *P, Blk *L, uint *mark, uint stamp)
 					found = 0;
 					break;
 				}
+				ub = fn->rpo[use->bid];
+				if (!inloop(mark, stamp, ub)) {
+					/* a use after the loop gets its own copy of the chain in its block (the chain's operands dominate
+					   it: the header's phi and the loop's invariants), so the multiply can leave the loop */
+					if (mode2 && rtype(qv) == RTmp && fn->tmp[qv.val].bid != -1u && fn->rpo[fn->tmp[qv.val].bid] == ub) {
+						found = 0;
+						break;
+					}
+					oadd[nout] = ad;
+					oblk[nout] = ub;
+					nout++;
+					continue;
+				}
 				adto[nin] = ad->to;
 				adbase[nin] = other;
 				nin++;
@@ -544,6 +560,30 @@ strengthen(Fn *fn, Blk *h, Blk *P, Blk *L, uint *mark, uint stamp)
 				xto = x->to;
 				offk = c * kk;
 				atmp = a ? a->to : R;
+				/* each use after the loop: a copy of the chain (the multiply's defining instructions, in order) before it */
+				for (j2=0; j2<nout; j2++) {
+					nch = 0;
+					if (mode2 && !req(pt, R))
+						ch[nch++] = fn->tmp[pt.val].def;
+					if (a)
+						ch[nch++] = a;
+					ch[nch++] = x;
+					ch[nch++] = m;
+					ncl[j2] = nch;
+					for (k2=0; k2<nch; k2++) {
+						c2 = &cl[j2][k2];
+						*c2 = *ch[k2];
+						for (q2=0; q2<k2; q2++)
+							for (m2=0; m2<2; m2++)
+								if (req(c2->arg[m2], ch[q2]->to))
+									c2->arg[m2] = cto[q2];
+						c2->to = newtmp("ivsr", c2->cls, fn);
+						cto[k2] = c2->to;
+					}
+					for (m2=0; m2<2; m2++)
+						if (req(oadd[j2]->arg[m2], m->to))
+							oadd[j2]->arg[m2] = cto[nch-1];
+				}
 				break;
 			}
 		}
@@ -648,6 +688,15 @@ strengthen(Fn *fn, Blk *h, Blk *P, Blk *L, uint *mark, uint stamp)
 			killdef(fn, a->to);
 		if (rtype(pt) == RTmp && !usedanywhere(fn, pt))
 			killdef(fn, pt);
+	}
+	for (j2=0; j2<nout; j2++) {
+		Blk *cb = oblk[j2];
+		Ins *ni = vnew(cb->nins + ncl[j2], sizeof ni[0], PFn);
+		for (k2=0; k2<ncl[j2]; k2++)
+			ni[k2] = cl[j2][k2];
+		memcpy(ni + ncl[j2], cb->ins, cb->nins * sizeof ni[0]);
+		cb->ins = ni;
+		cb->nins += ncl[j2];
 	}
 	dropnops(fn);
 	filluse(fn);
