@@ -338,6 +338,12 @@ copyref(Fn *fn, Blk *b, Ins *i)
 	&& zeroval(fn, b, i->arg[0], argcls(i, 0), &z))
 		return con01[optab[i->op].eqval^z^1];
 
+	/* and with zero is zero */
+	if (i->op == Oand
+	&& ((isconbits(fn, i->arg[0], &v) && v == 0)
+	|| (isconbits(fn, i->arg[1], &v) && v == 0)))
+		return CON_Z;
+
 	/* redundant and mask */
 	if (i->op == Oand
 	&& isconbits(fn, i->arg[1], &v)
