@@ -677,6 +677,7 @@ void gcm(Fn *);
 void licm(Fn *);
 void ivsr(Fn *);   /* loop strength reduction of addresses (licm.c, nfcxx) */
 void rotate(Fn *);   /* loop rotation (licm.c, nfcxx) */
+void unroll(Fn *);   /* unroll a self-loop by 4 with exit tests (unroll.c, nfcxx) */
 
 /* ifopt.c */
 void ifconvert(Fn *fn);

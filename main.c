@@ -124,6 +124,8 @@ func(Fn *fn)
 	filldom(fn);
 	ivsr(fn);
 	rotate(fn);
+	if (!getenv("QBE_NOUNROLL"))
+		unroll(fn);
 	T.isel(fn);
 	fillcfg(fn);
 	filllive(fn);
