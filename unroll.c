@@ -28,7 +28,10 @@ unr_append(Blk *b, Ins i)
 	b->nins++;
 }
 
-enum { UnrollCopies = 4, UnrollMaxIns = 32 };
+#ifndef UNROLL_F
+#define UNROLL_F 4
+#endif
+enum { UnrollCopies = UNROLL_F, UnrollMaxIns = 32 };
 
 static Ref
 mapref(Ref *m, Ref r)
@@ -59,10 +62,21 @@ okuse(Use *u, Blk *b, Blk *ex)
 	return u->type == UPhi || ex->npred == 1;
 }
 
-/* the test of b is csltw(in, K) with in = iv + c, c > 0, and iv a phi of b with back edge in; the guard constant is
-   K - 3c (the test of the copy that runs with in + 3c) */
+typedef struct Guard Guard;
+struct Guard {
+	Ins cmp;	/* the test of b */
+	int konst;	/* the bound is the constant k3 + 3c, else the temp bnd */
+	int64_t k3;
+	Ref bnd;
+	int64_t c;	/* the step: in = iv + c */
+};
+
+/* the test of b is op(in, K) with op a less-than (signed or unsigned, w or l), in = iv + c, c > 0, and iv a phi of
+   b with back edge in. K is a constant, or a temp defined outside b. The guard checks in + 3c < K (the test of the
+   copy that runs with in + 3c). The induction variable is assumed not to wrap (C signed overflow is undefined; a
+   pointer does not wrap). */
 static int
-guardform(Fn *fn, Blk *b, Ins *cmpout, int64_t *k3)
+guardform(Fn *fn, Blk *b, Guard *g)
 {
 	Ins *i, *cmp, *add;
 	Phi *p;
@@ -77,9 +91,11 @@ guardform(Fn *fn, Blk *b, Ins *cmpout, int64_t *k3)
 			cmp = i;
 			n++;
 		}
-	if (n != 1 || (cmp->op != Ocsltw && cmp->op != Ocsltl))
+	if (n != 1)
 		return 0;
-	if (rtype(cmp->arg[0]) != RTmp || !conbits(fn, cmp->arg[1], &k))
+	if (cmp->op != Ocsltw && cmp->op != Ocsltl && cmp->op != Ocultw && cmp->op != Ocultl)
+		return 0;
+	if (rtype(cmp->arg[0]) != RTmp)
 		return 0;
 	in = cmp->arg[0];
 	add = 0;
@@ -99,23 +115,33 @@ guardform(Fn *fn, Blk *b, Ins *cmpout, int64_t *k3)
 			break;
 	if (a == p->narg || !req(p->arg[a], in))
 		return 0;
-	/* the guard constant must not wrap in the comparison's class */
-	if (cmp->op == Ocsltw) {
-		lo = INT32_MIN;
-		hi = INT32_MAX;
-	} else {
-		lo = INT64_MIN / 2;
-		hi = INT64_MAX / 2;
+
+	g->cmp = *cmp;
+	g->c = c;
+	g->konst = conbits(fn, cmp->arg[1], &k);
+	if (g->konst) {
+		/* the guard constant must not wrap in the comparison's class */
+		if (cmp->op == Ocsltw || cmp->op == Ocultw) {
+			lo = cmp->op == Ocsltw ? INT32_MIN : 0;
+			hi = INT32_MAX;
+		} else {
+			lo = cmp->op == Ocsltl ? INT64_MIN / 2 : 0;
+			hi = INT64_MAX / 2;
+		}
+		if (c > hi || k - (UnrollCopies-1)*c < lo || k > hi)
+			return 0;
+		g->k3 = k - (UnrollCopies-1)*c;
+		return 1;
 	}
-	if (c > hi || k < lo + 3*c || k - 3*c < lo || k > hi)
+	/* a bound from outside b: a temp that b does not define */
+	if (rtype(cmp->arg[1]) != RTmp || fn->tmp[cmp->arg[1].val].bid == b->id || fn->tmp[cmp->arg[1].val].ndef != 1)
 		return 0;
-	*cmpout = *cmp;
-	*k3 = k - 3*c;
+	g->bnd = cmp->arg[1];
 	return 1;
 }
 
 static int
-unrollok(Fn *fn, Blk *b, Blk *P, Blk *ex, Ins *cmp, int64_t *k3)
+unrollok(Fn *fn, Blk *b, Blk *P, Blk *ex, Guard *g)
 {
 	Phi *p;
 	Ins *i;
@@ -141,7 +167,7 @@ unrollok(Fn *fn, Blk *b, Blk *P, Blk *ex, Ins *cmp, int64_t *k3)
 	}
 	if (n == 0 || n > UnrollMaxIns)
 		return 0;
-	if (!guardform(fn, b, cmp, k3))
+	if (!guardform(fn, b, g))
 		return 0;
 
 	/* every value defined in b is used only in b, in a phi of ex, or in an instruction of ex */
@@ -248,7 +274,7 @@ exitphi(Fn *fn, Blk *b, Blk *ex, Blk **c, Ref **m, Ref def, int cls)
 }
 
 static void
-unrollblk(Fn *fn, Blk *b, Blk *ex, Ins *cmp, int64_t k3)
+unrollblk(Fn *fn, Blk *b, Blk *ex, Guard *gd)
 {
 	Blk *c[UnrollCopies], *u[UnrollCopies], *G, *nb, *prev;
 	Ref *mc[UnrollCopies], *mu[UnrollCopies], *ident, g, orig;
@@ -300,9 +326,19 @@ unrollblk(Fn *fn, Blk *b, Blk *ex, Ins *cmp, int64_t k3)
 		u[k]->s1 = k+1 < UnrollCopies ? u[k+1] : b;
 	}
 
-	/* the guard: the three extra tests hold when in + 3c < K, i.e. in < K - 3c */
-	g = newtmp("unrg", cmp->cls, fn);
-	unr_append(G, (Ins){cmp->op, cmp->cls, g, {cmp->arg[0], getcon(k3, fn)}});
+	/* the guard: the three extra tests hold when in + 3c < K */
+	if (gd->konst)
+		unr_append(G, (Ins){gd->cmp.op, gd->cmp.cls, g = newtmp("unrg", gd->cmp.cls, fn), {gd->cmp.arg[0], getcon(gd->k3, fn)}});
+	else {
+		int wide = gd->cmp.op == Ocsltl || gd->cmp.op == Ocultl;
+		int cls = wide ? Kl : Kw;
+		Ref t;
+
+		t = newtmp("unrt", cls, fn);
+		unr_append(G, (Ins){Oadd, cls, t, {gd->cmp.arg[0], getcon((UnrollCopies-1)*gd->c, fn)}});
+		g = newtmp("unrg", gd->cmp.cls, fn);
+		unr_append(G, (Ins){gd->cmp.op, gd->cmp.cls, g, {t, gd->bnd}});
+	}
 	G->jmp.type = Jjnz;
 	G->jmp.arg = g;
 	G->s1 = u[1];
@@ -355,8 +391,7 @@ void
 unroll(Fn *fn)
 {
 	Blk *b, *P, *ex, *next;
-	Ins cmp;
-	int64_t k3;
+	Guard gd;
 	int changed;
 
 	fillcfg(fn);
@@ -370,9 +405,9 @@ unroll(Fn *fn)
 		P = b->pred[0] == b ? b->pred[1] : b->pred[0];
 		if (!ex || !P || P == b)
 			continue;
-		if (!unrollok(fn, b, P, ex, &cmp, &k3))
+		if (!unrollok(fn, b, P, ex, &gd))
 			continue;
-		unrollblk(fn, b, ex, &cmp, k3);
+		unrollblk(fn, b, ex, &gd);
 		changed = 1;
 	}
 	if (changed) {
