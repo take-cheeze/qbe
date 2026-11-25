@@ -69,6 +69,11 @@ struct Guard {
 	int64_t k3;
 	Ref bnd;
 	int64_t c;	/* the step: in = iv + c */
+	/* the accumulator (acc != 0): s = phi(init, d), d = add(s, accx) in b, and s is used only there. The unchecked
+	   copies sum their accx values apart from s and add the total once: s + (x1 + x2 + x3) */
+	Ins *acc;
+	Ref accs, accx, accd;
+	int acc_cls;
 };
 
 /* the test of b is op(in, K) with op a less-than (signed or unsigned, w or l), in = iv + c, c > 0, and iv a phi of
@@ -140,6 +145,57 @@ guardform(Fn *fn, Blk *b, Guard *g)
 	return 1;
 }
 
+/* the accumulator of b: a phi s whose back edge is d = add(s, x) (an integer add in b), with s used only by that add */
+static int
+findacc(Fn *fn, Blk *b, Guard *g)
+{
+	Phi *p;
+	Ins *i, *A;
+	Use *u;
+	Ref x, d;
+	uint a, t;
+
+	g->acc = 0;
+	for (p=b->phi; p; p=p->link) {
+		if (p->narg != 2)
+			continue;
+		for (a=0; a<2; a++)
+			if (p->blk[a] == b)
+				break;
+		if (a == 2 || rtype(p->arg[a]) != RTmp)
+			continue;
+		d = p->arg[a];
+		A = 0;
+		for (i=b->ins; i<&b->ins[b->nins]; i++)
+			if (i->op != Onop && i->op != Odbgloc && req(i->to, d))
+				A = i;
+		if (!A || A->op != Oadd || (A->cls != Kw && A->cls != Kl))
+			continue;
+		if (req(A->arg[0], p->to))
+			x = A->arg[1];
+		else if (req(A->arg[1], p->to))
+			x = A->arg[0];
+		else
+			continue;
+		/* x is a value computed in b (a product, say): an induction step by a constant is not a sum of data */
+		if (req(x, p->to) || req(x, d) || rtype(x) != RTmp || fn->tmp[x.val].bid != b->id)
+			continue;
+		t = p->to.val;
+		for (u=fn->tmp[t].use; u<&fn->tmp[t].use[fn->tmp[t].nuse]; u++)
+			if (u->bid == b->id && !(u->type == UIns && u->u.ins == A))
+				break;
+		if (u < &fn->tmp[t].use[fn->tmp[t].nuse])
+			continue;
+		g->acc = A;
+		g->accs = p->to;
+		g->accx = x;
+		g->accd = d;
+		g->acc_cls = A->cls;
+		return 1;
+	}
+	return 0;
+}
+
 static int
 unrollok(Fn *fn, Blk *b, Blk *P, Blk *ex, Guard *g)
 {
@@ -169,6 +225,9 @@ unrollok(Fn *fn, Blk *b, Blk *P, Blk *ex, Guard *g)
 		return 0;
 	if (!guardform(fn, b, g))
 		return 0;
+	/* the accumulator split needs the four copies of the unrolled group */
+	if (UnrollCopies == 4)
+		findacc(fn, b, g);
 
 	/* every value defined in b is used only in b, in a phi of ex, or in an instruction of ex */
 	for (p=b->phi; p; p=p->link) {
@@ -215,12 +274,12 @@ buildmap(Fn *fn, Blk *b, Ref *prev, Ref *cur, Ref *ident, uint nt)
 }
 
 static void
-emitcopy(Blk *nb, Blk *b, Ref *m)
+emitcopy(Blk *nb, Blk *b, Ref *m, Ins *skip)
 {
 	Ins *i, ni;
 
 	for (i=b->ins; i<&b->ins[b->nins]; i++) {
-		if (i->op == Onop || i->op == Odbgloc)
+		if (i->op == Onop || i->op == Odbgloc || i == skip)
 			continue;
 		ni = *i;
 		if (!req(i->to, R))
@@ -313,7 +372,7 @@ unrollblk(Fn *fn, Blk *b, Blk *ex, Guard *gd)
 
 	/* the checked copies: each keeps its test; the exit goes to ex */
 	for (k=1; k<UnrollCopies; k++) {
-		emitcopy(c[k], b, mc[k]);
+		emitcopy(c[k], b, mc[k], 0);
 		c[k]->jmp.type = Jjnz;
 		c[k]->jmp.arg = mapref(mc[k], b->jmp.arg);
 		c[k]->s1 = k+1 < UnrollCopies ? c[k+1] : b;
@@ -321,9 +380,27 @@ unrollblk(Fn *fn, Blk *b, Blk *ex, Guard *gd)
 	}
 	/* the unchecked copies: no test; U3 goes back to b */
 	for (k=1; k<UnrollCopies; k++) {
-		emitcopy(u[k], b, mu[k]);
+		emitcopy(u[k], b, mu[k], gd->acc);
 		u[k]->jmp.type = Jjmp;
 		u[k]->s1 = k+1 < UnrollCopies ? u[k+1] : b;
+	}
+	if (gd->acc) {
+		/* P = x1; P = P + x2; P = P + x3; s4 = s + P (s is b's d: the value the group starts from) */
+		Ref P;
+		int cls;
+
+		cls = gd->acc_cls;
+		P = mapref(mu[1], gd->accx);
+		for (k=2; k<UnrollCopies; k++) {
+			Ref q = newtmp("unp", cls, fn);
+			unr_append(u[k], (Ins){Oadd, cls, q, {P, mapref(mu[k], gd->accx)}});
+			P = q;
+		}
+		{
+			Ref s4 = newtmp("uns", cls, fn);
+			unr_append(u[UnrollCopies-1], (Ins){Oadd, cls, s4, {gd->accd, P}});
+			mu[UnrollCopies-1][gd->accd.val] = s4;
+		}
 	}
 
 	/* the guard: the three extra tests hold when in + 3c < K */
